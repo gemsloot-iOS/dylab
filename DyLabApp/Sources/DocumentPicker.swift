@@ -22,12 +22,9 @@ struct DocumentPicker: UIViewControllerRepresentable {
         if let dylib = UTType(filenameExtension: "dylib") {
             types.append(dylib)
         }
-        if let debImported = UTType(importedAs: "org.debian.deb-archive") {
-            types.append(debImported)
-        }
-        if let dylibImported = UTType(importedAs: "com.apple.mach-o-dylib") {
-            types.append(dylibImported)
-        }
+        // UTType(importedAs:) is non-optional on current SDKs.
+        types.append(UTType(importedAs: "org.debian.deb-archive"))
+        types.append(UTType(importedAs: "com.apple.mach-o-dylib"))
         return types
     }
 
