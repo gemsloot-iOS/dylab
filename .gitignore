@@ -1,0 +1,34 @@
+# Xcode / XcodeGen
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+build/
+*.ipa
+Payload/
+
+# Swift / SPM
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store
+
+# WAMR source checkout (cloned by scripts/build_wamr_ios.sh)
+Deps/wasm-micro-runtime/
+
+# Built WAMR iOS artifacts (produced on CI / locally by the script)
+Deps/wamr-ios/lib/*
+!Deps/wamr-ios/lib/.gitkeep
+Deps/wamr-ios/include/*
+!Deps/wamr-ios/include/.gitkeep
+
+# Editor / IDE
+.idea/
+*.swp
+*~
+
+# Local toolchains / temp
+/tmp/
+*.o
+*.a
+!Deps/wamr-ios/lib/.gitkeep
