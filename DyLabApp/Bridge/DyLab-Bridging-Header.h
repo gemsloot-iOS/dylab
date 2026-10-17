@@ -2,3 +2,8 @@
 #import "MachOInspector.h"
 #import "ObjCDumper.h"
 #import "DecompilerEngine.h"
+#import "ObjCLowering.h"
+#import "MachODylibLinker.h"
+#import "MachOSigner.h"
+#import "DebPackager.h"
+#import "TweakBuilder.h"
