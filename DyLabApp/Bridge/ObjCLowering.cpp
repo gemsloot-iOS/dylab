@@ -18,11 +18,22 @@ const char *kPreamble = R"PRE(
 #include <objc/objc.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
+/*
+ * Foundation.h owns the canonical __dylab_cfstring / MSHookMessageEx
+ * (static inline id / void) behind DYLAB_CFSTRING_DEFINED / DYLAB_MSHOOK_DEFINED.
+ * Do NOT redeclare with a different type here — TCC errors on incompatible
+ * redefinition (e.g. const void * vs id).
+ */
 #include <Foundation/Foundation.h>
 
-#ifndef DYLAB_CFSTRING_IMPL
-#define DYLAB_CFSTRING_IMPL 1
-/* Minimal toll-free CFString-like constant for @"..." → __dylab_cfstring */
+/* Path C: TinyCC has no ObjC `super` keyword — approximate as self.
+ * (True objc_msgSendSuper can be added later if needed.) */
+#ifndef super
+#define super self
+#endif
+
+#ifndef DYLAB_CFSTRING_DEFINED
+#define DYLAB_CFSTRING_DEFINED 1
 typedef struct {
     void *isa;
     uint32_t info;
@@ -30,24 +41,23 @@ typedef struct {
     const char *data;
     size_t length;
 } __DYLAB_CFString;
-static id __dylab_cfstring(const char *utf8) {
-    /* Heap box so pointer stays valid; tweak lifetime = process. */
+static inline id __dylab_cfstring(const char *utf8) {
     size_t n = utf8 ? strlen(utf8) : 0;
     __DYLAB_CFString *s = (__DYLAB_CFString *)calloc(1, sizeof(*s));
     if (!s) return nil;
     s->isa = (void *)objc_getClass("NSConstantString");
     if (!s->isa) s->isa = (void *)objc_getClass("__NSCFConstantString");
     if (!s->isa) s->isa = (void *)objc_getClass("NSString");
-    s->info = 0x07c8; /* classic CFString constant-ish flags */
+    s->info = 0x07c8;
     s->data = utf8 ? utf8 : "";
     s->length = n;
     return (id)s;
 }
-#endif
+#endif /* DYLAB_CFSTRING_DEFINED */
 
-#ifndef DYLAB_MSHOOK_IMPL
-#define DYLAB_MSHOOK_IMPL 1
-static void MSHookMessageEx(Class cls, SEL sel, IMP imp, IMP *result) {
+#ifndef DYLAB_MSHOOK_DEFINED
+#define DYLAB_MSHOOK_DEFINED 1
+static inline void MSHookMessageEx(Class cls, SEL sel, IMP imp, IMP *result) {
     Method m = class_getInstanceMethod(cls, sel);
     if (!m) m = class_getClassMethod(cls, sel);
     if (!m) {
@@ -57,10 +67,12 @@ static void MSHookMessageEx(Class cls, SEL sel, IMP imp, IMP *result) {
     }
     IMP old = method_getImplementation(m);
     if (result) *result = old;
-    const char *types = method_getTypeEncoding(m);
-    class_replaceMethod(cls, sel, imp, types ? types : "@@:");
+    {
+        const char *types = method_getTypeEncoding(m);
+        class_replaceMethod(cls, sel, imp, types ? types : "@@:");
+    }
 }
-#endif
+#endif /* DYLAB_MSHOOK_DEFINED */
 
 )PRE";
 

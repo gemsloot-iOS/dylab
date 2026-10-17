@@ -21,6 +21,7 @@ typedef signed char BOOL;
 SEL sel_registerName(const char *str);
 Class objc_getClass(const char *name);
 Class object_getClass(id obj);
+Class class_getSuperclass(Class cls);
 Method class_getInstanceMethod(Class cls, SEL name);
 Method class_getClassMethod(Class cls, SEL name);
 IMP method_getImplementation(Method m);

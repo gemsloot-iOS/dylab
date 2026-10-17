@@ -12,7 +12,7 @@ CFLAGS ?= -O2 -Wall -I$(BRIDGE)
 LDFLAGS_Z ?= -lz
 LDFLAGS_TCC ?= -L$(TCC_LIBDIR) -ltcc -ldl -lm
 
-.PHONY: all clean lowering deb link
+.PHONY: all clean lowering deb link e2e
 
 all: lowering deb
 
@@ -24,6 +24,9 @@ deb: test_deb_packager
 
 link: test_link_smoke
 	./test_link_smoke
+
+e2e:
+	bash ./test_e2e_pipeline.sh
 
 test_objc_lowering: test_objc_lowering.cpp $(BRIDGE)/ObjCLowering.cpp
 	$(CXX) $(CXXFLAGS) -o $@ test_objc_lowering.cpp $(BRIDGE)/ObjCLowering.cpp
