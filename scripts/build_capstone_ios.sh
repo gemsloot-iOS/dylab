@@ -1,20 +1,35 @@
 #!/usr/bin/env bash
 # Build Capstone static library for iOS arm64 into Deps/capstone-ios.
-# Intended for macOS GitHub Actions runners with Xcode / CMake.
+# Uses Capstone's Makefile / make.sh ios path (CMake iOS cross ignores/overwrites flags).
+# Intended for macOS GitHub Actions runners with Xcode.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPS_DIR="${ROOT_DIR}/Deps/capstone-ios"
 CAPSTONE_SRC="${ROOT_DIR}/Deps/capstone"
-BUILD_DIR="${CAPSTONE_SRC}/build-ios"
 
 mkdir -p "${DEPS_DIR}/lib" "${DEPS_DIR}/include"
 
+verify_arm64_lib() {
+  local lib="$1"
+  if [[ ! -f "${lib}" ]]; then
+    return 1
+  fi
+  local info
+  info="$(lipo -info "${lib}" 2>&1 || true)"
+  echo "lipo -info ${lib}: ${info}"
+  echo "${info}" | grep -q 'arm64'
+}
+
 if [[ -f "${DEPS_DIR}/lib/libcapstone.a" && -d "${DEPS_DIR}/include/capstone" ]]; then
-  echo "==> Capstone iOS artifacts already present at ${DEPS_DIR} (cache hit)"
-  ls -la "${DEPS_DIR}/lib" "${DEPS_DIR}/include/capstone" | head -40
-  lipo -info "${DEPS_DIR}/lib/libcapstone.a" 2>/dev/null || true
-  exit 0
+  if verify_arm64_lib "${DEPS_DIR}/lib/libcapstone.a"; then
+    echo "==> Capstone iOS arm64 artifacts already present at ${DEPS_DIR} (cache hit)"
+    ls -la "${DEPS_DIR}/lib" "${DEPS_DIR}/include/capstone" | head -40
+    exit 0
+  fi
+  echo "==> Cache present but not arm64 — rebuilding"
+  rm -f "${DEPS_DIR}/lib/libcapstone.a"
+  rm -rf "${DEPS_DIR}/include/capstone"
 fi
 
 if [[ ! -d "${CAPSTONE_SRC}/.git" ]]; then
@@ -26,88 +41,74 @@ else
 fi
 
 IPHONEOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-CLANG="$(xcrun -f clang)"
-CLANGXX="$(xcrun -f clang++)"
-IOS_MIN="16.0"
-IOS_CFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=${IOS_MIN}"
-IOS_CXXFLAGS="${IOS_CFLAGS}"
+export CC="$(xcrun --sdk iphoneos -f clang)"
+# Capstone Makefile on Darwin adds -arch from LIBARCHS when MACOS_UNIVERSAL=yes
+# (see make.sh build_iOS / ios_arm64). Also pass target + sysroot explicitly.
+export CFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0 -Os"
+export LDFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0"
+export LIBARCHS="arm64"
+export MACOS_UNIVERSAL="yes"
+export CAPSTONE_ARCHS="aarch64"
+export CAPSTONE_SHARED="no"
+export CAPSTONE_STATIC="yes"
+export CAPSTONE_BUILD_CORE_ONLY="yes"
 
 echo "==> iPhoneOS SDK: ${IPHONEOS_SDK}"
-echo "==> clang: ${CLANG}"
+echo "==> CC: ${CC}"
+echo "==> CFLAGS: ${CFLAGS}"
 
-echo "==> Configuring Capstone for iOS arm64"
-rm -rf "${BUILD_DIR}"
-mkdir -p "${BUILD_DIR}"
-# Capstone v5 CPackConfig.txt needs CMAKE_SYSTEM_PROCESSOR set under iOS.
-# Capstone v5 uses CAPSTONE_ARM64_SUPPORT (not AARCH64).
-# Explicit SDK/sysroot/-arch so host clang does not compile against iPhoneOS headers
-# without an arm64 target (causes "Unsupported architecture").
-cmake -S "${CAPSTONE_SRC}" -B "${BUILD_DIR}" \
-  -G "Unix Makefiles" \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_MIN}" \
-  -DCMAKE_OSX_SYSROOT="${IPHONEOS_SDK}" \
-  -DCMAKE_C_COMPILER="${CLANG}" \
-  -DCMAKE_CXX_COMPILER="${CLANGXX}" \
-  -DCMAKE_C_FLAGS="${IOS_CFLAGS}" \
-  -DCMAKE_CXX_FLAGS="${IOS_CXXFLAGS}" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCPACK_GENERATOR= \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DCAPSTONE_BUILD_SHARED=OFF \
-  -DCAPSTONE_BUILD_STATIC=ON \
-  -DCAPSTONE_BUILD_TESTS=OFF \
-  -DCAPSTONE_BUILD_CSTOOL=OFF \
-  -DCAPSTONE_ARCHITECTURE_DEFAULT=OFF \
-  -DCAPSTONE_ARM_SUPPORT=OFF \
-  -DCAPSTONE_ARM64_SUPPORT=ON \
-  -DCAPSTONE_MIPS_SUPPORT=OFF \
-  -DCAPSTONE_PPC_SUPPORT=OFF \
-  -DCAPSTONE_SPARC_SUPPORT=OFF \
-  -DCAPSTONE_SYSZ_SUPPORT=OFF \
-  -DCAPSTONE_X86_SUPPORT=OFF \
-  -DCAPSTONE_XCORE_SUPPORT=OFF \
-  -DCAPSTONE_M68K_SUPPORT=OFF \
-  -DCAPSTONE_TMS320C64X_SUPPORT=OFF \
-  -DCAPSTONE_M680X_SUPPORT=OFF \
-  -DCAPSTONE_EVM_SUPPORT=OFF \
-  -DCAPSTONE_MOS65XX_SUPPORT=OFF \
-  -DCAPSTONE_WASM_SUPPORT=OFF \
-  -DCAPSTONE_BPF_SUPPORT=OFF \
-  -DCAPSTONE_RISCV_SUPPORT=OFF \
-  -DCAPSTONE_SH_SUPPORT=OFF \
-  -DCAPSTONE_TRICORE_SUPPORT=OFF
+cd "${CAPSTONE_SRC}"
 
-echo "==> Building libcapstone"
-cmake --build "${BUILD_DIR}" --config Release -j "$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+echo "==> Cleaning Capstone"
+make clean || true
+rm -f libcapstone.a libcapstone.*.dylib libcapstone.dylib 2>/dev/null || true
 
-LIB_CANDIDATES=(
-  "${BUILD_DIR}/libcapstone.a"
-  "${BUILD_DIR}/Release/libcapstone.a"
-)
+echo "==> Building Capstone static (aarch64 / ios arm64) via Makefile"
+# Official Capstone path: ./make.sh ios_arm64 — replicate with our arch/shared flags.
+NCPU="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+make -j"${NCPU}" \
+  CAPSTONE_ARCHS=aarch64 \
+  CAPSTONE_SHARED=no \
+  CAPSTONE_STATIC=yes \
+  CAPSTONE_BUILD_CORE_ONLY=yes \
+  MACOS_UNIVERSAL=yes \
+  LIBARCHS=arm64 \
+  CC="${CC}" \
+  CFLAGS="${CFLAGS}" \
+  LDFLAGS="${LDFLAGS}"
 
 FOUND_LIB=""
-for candidate in "${LIB_CANDIDATES[@]}"; do
+for candidate in \
+
+  ; do
   if [[ -f "${candidate}" ]]; then
     FOUND_LIB="${candidate}"
     break
   fi
 done
-
+# Also search under CAPSTONE_SRC
 if [[ -z "${FOUND_LIB}" ]]; then
-  echo "ERROR: libcapstone.a not found under ${BUILD_DIR}" >&2
-  find "${BUILD_DIR}" -name 'libcapstone*' -print >&2 || true
+  FOUND_LIB="$(find "${CAPSTONE_SRC}" -maxdepth 2 -name 'libcapstone.a' -print -quit || true)"
+fi
+
+if [[ -z "${FOUND_LIB}" || ! -f "${FOUND_LIB}" ]]; then
+  echo "ERROR: libcapstone.a not found after make" >&2
+  ls -la "${CAPSTONE_SRC}" | head -40 >&2
   exit 1
 fi
 
 echo "==> Verifying architecture of ${FOUND_LIB}"
-LIPO_INFO="$(lipo -info "${FOUND_LIB}" 2>&1 || true)"
-echo "${LIPO_INFO}"
-if ! echo "${LIPO_INFO}" | grep -q 'arm64'; then
-  echo "ERROR: expected arm64 in libcapstone.a, got: ${LIPO_INFO}" >&2
+if ! verify_arm64_lib "${FOUND_LIB}"; then
+  echo "ERROR: expected arm64 in libcapstone.a" >&2
+  # Show first object arch for debugging
+  otool -hv "${FOUND_LIB}" 2>&1 | head -40 || true
   exit 1
+fi
+
+# Confirm a compile line would have used arm64 (dump one .o if present)
+SAMPLE_OBJ="$(find "${CAPSTONE_SRC}" -name 'cs.o' -print -quit 2>/dev/null || true)"
+if [[ -n "${SAMPLE_OBJ}" ]]; then
+  echo "==> Sample object: $(lipo -info "${SAMPLE_OBJ}" 2>&1 || file "${SAMPLE_OBJ}")"
 fi
 
 echo "==> Staging ${FOUND_LIB} -> ${DEPS_DIR}/lib/libcapstone.a"
@@ -117,13 +118,15 @@ rm -rf "${DEPS_DIR}/include/capstone"
 mkdir -p "${DEPS_DIR}/include"
 if [[ -d "${CAPSTONE_SRC}/include/capstone" ]]; then
   cp -R "${CAPSTONE_SRC}/include/capstone" "${DEPS_DIR}/include/"
-elif [[ -d "${BUILD_DIR}/include/capstone" ]]; then
-  cp -R "${BUILD_DIR}/include/capstone" "${DEPS_DIR}/include/"
 else
   echo "ERROR: capstone headers not found" >&2
   exit 1
 fi
 
+if ! verify_arm64_lib "${DEPS_DIR}/lib/libcapstone.a"; then
+  echo "ERROR: staged libcapstone.a is not arm64" >&2
+  exit 1
+fi
+
 echo "==> Capstone iOS artifacts ready in ${DEPS_DIR}"
 ls -la "${DEPS_DIR}/lib" "${DEPS_DIR}/include/capstone" | head -40
-lipo -info "${DEPS_DIR}/lib/libcapstone.a"
