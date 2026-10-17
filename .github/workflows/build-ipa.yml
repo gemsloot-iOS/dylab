@@ -1,0 +1,65 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache WAMR iOS artifacts
+        uses: actions/cache@v4
+        with:
+          path: Deps/wamr-ios
+          key: wamr-ios-${{ hashFiles('scripts/build_wamr_ios.sh') }}
+          restore-keys: |
+            wamr-ios-
+
+      - name: Build WAMR for iOS
+        run: bash scripts/build_wamr_ios.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build Release (unsigned iphoneos)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project DyLab.xcodeproj \
+            -scheme DyLab \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -name 'DyLab.app' -print -quit)"
+          if [[ -z "${APP_PATH}" ]]; then
+            echo "DyLab.app not found under build/Build/Products/Release-iphoneos" >&2
+            find build -name '*.app' -print >&2 || true
+            exit 1
+          fi
+          rm -rf Payload DyLab.ipa
+          mkdir Payload
+          cp -R "${APP_PATH}" Payload/
+          zip -r DyLab.ipa Payload
+          ls -lh DyLab.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DyLab.ipa
+          path: DyLab.ipa
