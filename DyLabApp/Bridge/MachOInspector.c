@@ -81,8 +81,11 @@ struct section_64 {
     uint32_t reserved2;
     uint32_t reserved3;
 };
+union lc_str {
+    uint32_t offset;
+};
 struct dylib {
-    uint32_t name;
+    union lc_str name;
     uint32_t timestamp;
     uint32_t current_version;
     uint32_t compatibility_version;
@@ -95,7 +98,7 @@ struct dylib_command {
 struct rpath_command {
     uint32_t cmd;
     uint32_t cmdsize;
-    uint32_t path;
+    union lc_str path;
 };
 struct symtab_command {
     uint32_t cmd;
@@ -374,7 +377,7 @@ inspect_thin(const uint8_t *base, size_t len, int is_fat_slice, JsonBuf *jb)
         if (cmd == LC_LOAD_DYLIB || cmd == LC_ID_DYLIB ||
             cmd == LC_LOAD_WEAK_DYLIB || cmd == LC_REEXPORT_DYLIB) {
             const struct dylib_command *dc = (const struct dylib_command *)scan;
-            uint32_t name_off = u32_native(dc->dylib.name, swap);
+            uint32_t name_off = u32_native(dc->dylib.name.offset, swap);
             const char *name =
                 (name_off < cmdsize) ? (const char *)(scan + name_off) : "";
             if (!first) {
@@ -403,7 +406,7 @@ inspect_thin(const uint8_t *base, size_t len, int is_fat_slice, JsonBuf *jb)
         }
         if (cmd == LC_RPATH) {
             const struct rpath_command *rc = (const struct rpath_command *)scan;
-            uint32_t path_off = u32_native(rc->path, swap);
+            uint32_t path_off = u32_native(rc->path.offset, swap);
             const char *path =
                 (path_off < cmdsize) ? (const char *)(scan + path_off) : "";
             if (!first) {
