@@ -25,6 +25,7 @@ targets:
       - path: DyLabApp/Resources
         buildPhase: resources
     info:
+      path: DyLabApp/Info.plist
       properties:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
