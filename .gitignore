@@ -41,3 +41,8 @@ Deps/tcc-ios/include/*
 *.o
 *.a
 workspace_test.txt
+
+# Host test binaries
+tests/test_objc_lowering
+tests/test_deb_packager
+tests/test_link_smoke
