@@ -75,13 +75,13 @@ struct MachODetailView: View {
                                     title: "\(cls.name).\(method.name)",
                                     fileOffset: method.fileOffset,
                                     vma: method.vma,
-                                    size: 0
+                                    size: method.size
                                 )
                             } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(method.name)
                                         .font(.body.monospaced())
-                                    Text("imp \(method.vmaHex)  off \(method.fileOffset)")
+                                    Text("imp \(method.vmaHex)  off \(method.fileOffset)  size \(method.size)")
                                         .font(.caption2.monospaced())
                                         .foregroundStyle(.secondary)
                                 }
@@ -113,13 +113,13 @@ struct MachODetailView: View {
                             title: fn.name,
                             fileOffset: fn.fileOffset,
                             vma: fn.vma,
-                            size: 0
+                            size: fn.size
                         )
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(fn.name)
                                 .font(.body.monospaced())
-                            Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)")
+                            Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)  size \(fn.size)")
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.secondary)
                         }
@@ -289,11 +289,14 @@ struct MachODetailView: View {
                         let mVma = parseHex(m["imp"] as? String)
                         let off = (m["file_offset"] as? NSNumber)?.uint64Value
                             ?? UInt64(m["file_offset"] as? Int ?? 0)
+                        let sz = (m["size"] as? NSNumber)?.uint64Value
+                            ?? UInt64(m["size"] as? Int ?? 0)
                         methods.append(ObjCMethodEntry(
                             id: "\(name).\(mname).\(mi)",
                             name: mname,
                             vma: mVma,
-                            fileOffset: off
+                            fileOffset: off,
+                            size: sz
                         ))
                     }
                 }
@@ -317,12 +320,15 @@ struct MachODetailView: View {
                 let vma = parseHex(f["vma"] as? String)
                 let off = (f["file_offset"] as? NSNumber)?.uint64Value
                     ?? UInt64(f["file_offset"] as? Int ?? 0)
+                let sz = (f["size"] as? NSNumber)?.uint64Value
+                    ?? UInt64(f["size"] as? Int ?? 0)
                 callables.append(CallableEntry(
                     id: "\(kind).\(name).\(idx)",
                     name: name,
                     kind: kind,
                     vma: vma,
-                    fileOffset: off
+                    fileOffset: off,
+                    size: sz
                 ))
             }
         }
@@ -352,6 +358,7 @@ struct ObjCMethodEntry: Identifiable {
     let name: String
     let vma: UInt64
     let fileOffset: UInt64
+    let size: UInt64
 
     var vmaHex: String { String(format: "0x%llx", vma) }
 }
@@ -362,6 +369,7 @@ struct CallableEntry: Identifiable {
     let kind: String
     let vma: UInt64
     let fileOffset: UInt64
+    let size: UInt64
 
     var vmaHex: String { String(format: "0x%llx", vma) }
 }

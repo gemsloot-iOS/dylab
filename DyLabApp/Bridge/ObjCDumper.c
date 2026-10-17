@@ -234,8 +234,10 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
         jb_escape(jb, name);
         jb_puts(jb, ",\"types\":");
         jb_escape(jb, types);
-        jb_printf(jb, ",\"imp\":\"0x%llx\",\"file_offset\":%llu}",
-                  (unsigned long long)imp, (unsigned long long)file_off);
+        jb_printf(jb,
+                  ",\"imp\":\"0x%llx\",\"file_offset\":%llu,\"size\":%llu}",
+                  (unsigned long long)imp, (unsigned long long)file_off,
+                  (unsigned long long)macho_function_size_at(map, imp));
     }
 }
 
@@ -396,100 +398,90 @@ dump_one_class(JB *jb, const MachOMap *map, uint64_t class_vma, int *first_class
 }
 
 static void
-dump_callables(JB *jb, const MachOMap *map)
+dump_callables(JB *jb, const MachOMap *map, const uint64_t *method_imps,
+               int n_method_imps)
 {
-    const MachOSect *text = macho_find_sect(map, "__TEXT", "__text");
+    MachOTextFn *fns;
+    int n;
     int first = 1;
+
     jb_puts(jb, "\"callables\":[");
-
-    /* LC_FUNCTION_STARTS ULEB128 offsets from text base. */
-    if (map->function_starts_off && map->function_starts_size && text) {
-        const uint8_t *p =
-            map->file + map->thin_off + map->function_starts_off;
-        const uint8_t *end = p + map->function_starts_size;
-        uint64_t addr = text->addr;
-        while (p < end) {
-            uint64_t delta = 0;
-            int shift = 0;
-            while (p < end) {
-                uint8_t b = *p++;
-                delta |= (uint64_t)(b & 0x7f) << shift;
-                if ((b & 0x80) == 0) {
-                    break;
-                }
-                shift += 7;
-            }
-            if (delta == 0 && addr != text->addr) {
-                break;
-            }
-            addr += delta;
-            if (addr >= text->addr + text->size) {
-                break;
-            }
-            {
-                uint64_t foff = 0;
-                macho_vma_to_fileoff(map, addr, &foff);
-                if (!first) {
-                    jb_puts(jb, ",");
-                }
-                first = 0;
-                jb_printf(jb,
-                          "{\"kind\":\"function_start\",\"vma\":\"0x%llx\","
-                          "\"file_offset\":%llu,\"name\":\"sub_%llx\"}",
-                          (unsigned long long)addr, (unsigned long long)foff,
-                          (unsigned long long)addr);
-            }
-            if (first == 0 && jb->len > 200000) {
-                break;
-            }
+    fns = (MachOTextFn *)calloc(DYLAB_MAX_TEXT_FNS, sizeof(MachOTextFn));
+    if (!fns) {
+        jb_puts(jb, "]");
+        return;
+    }
+    n = macho_collect_text_functions(map, method_imps, n_method_imps, fns,
+                                     DYLAB_MAX_TEXT_FNS);
+    for (int i = 0; i < n; i++) {
+        if (!first) {
+            jb_puts(jb, ",");
+        }
+        first = 0;
+        jb_puts(jb, "{\"kind\":");
+        jb_escape(jb, fns[i].kind[0] ? fns[i].kind : "symbol");
+        jb_puts(jb, ",\"name\":");
+        jb_escape(jb, fns[i].name);
+        jb_printf(jb,
+                  ",\"vma\":\"0x%llx\",\"file_offset\":%llu,\"size\":%llu}",
+                  (unsigned long long)fns[i].vma,
+                  (unsigned long long)fns[i].file_offset,
+                  (unsigned long long)fns[i].size);
+        if (jb->len > 400000) {
+            break;
         }
     }
-
-    /* External/exported symbols in __TEXT,__text from LC_SYMTAB. */
-    if (map->nsyms && map->symoff && map->stroff && text) {
-        const struct nlist_64 *syms =
-            (const struct nlist_64 *)(map->file + map->thin_off + map->symoff);
-        const char *strtab =
-            (const char *)(map->file + map->thin_off + map->stroff);
-        uint32_t max = map->nsyms > 2000 ? 2000 : map->nsyms;
-        if ((size_t)map->symoff + (size_t)map->nsyms * sizeof(struct nlist_64) >
-                map->thin_len ||
-            (size_t)map->stroff + map->strsize > map->thin_len) {
-            max = 0;
-        }
-        for (uint32_t i = 0; i < max; i++) {
-            uint32_t strx = syms[i].n_un.n_strx;
-            uint64_t val = macho_strip_ptr(syms[i].n_value);
-            const char *name;
-            if (strx >= map->strsize) {
-                continue;
-            }
-            if ((syms[i].n_type & N_TYPE) != N_SECT) {
-                continue;
-            }
-            if (val < text->addr || val >= text->addr + text->size) {
-                continue;
-            }
-            name = strtab + strx;
-            if (!name[0]) {
-                continue;
-            }
-            {
-                uint64_t foff = 0;
-                macho_vma_to_fileoff(map, val, &foff);
-                if (!first) {
-                    jb_puts(jb, ",");
-                }
-                first = 0;
-                jb_puts(jb, "{\"kind\":\"symbol\",\"name\":");
-                jb_escape(jb, name);
-                jb_printf(jb, ",\"vma\":\"0x%llx\",\"file_offset\":%llu}",
-                          (unsigned long long)val, (unsigned long long)foff);
-            }
-        }
-    }
-
+    free(fns);
     jb_puts(jb, "]");
+}
+
+/* Collect method IMP VMAs for size merging into callables. */
+static void
+collect_method_imps_from_list(const MachOMap *map, uint64_t method_list_vma,
+                              uint64_t *out, int *n, int max)
+{
+    const uint8_t *base;
+    uint32_t entsize_flags;
+    uint32_t count;
+    int relative;
+    uint32_t entsize;
+
+    if (method_list_vma == 0 || *n >= max) {
+        return;
+    }
+    base = macho_vma_to_ptr(map, method_list_vma, 8);
+    if (!base) {
+        return;
+    }
+    entsize_flags = ru32(base);
+    count = ru32(base + 4);
+    relative = (entsize_flags & METHOD_LIST_RELATIVE) != 0;
+    entsize = entsize_flags & 0xFFFFu;
+    if (entsize == 0) {
+        entsize = relative ? 12 : 24;
+    }
+    if (count > 4096) {
+        count = 4096;
+    }
+    for (uint32_t i = 0; i < count && *n < max; i++) {
+        const uint8_t *mp = base + 8 + (size_t)i * entsize;
+        uint64_t imp = 0;
+        if (relative) {
+            int32_t imp_rel = ri32(mp + 8);
+            imp = macho_strip_ptr(method_list_vma + 8 + (uint64_t)i * entsize +
+                                  8) +
+                  (int64_t)imp_rel;
+        } else {
+            if (!macho_vma_to_ptr(map, method_list_vma + 8 + (uint64_t)i * entsize,
+                                  24)) {
+                break;
+            }
+            imp = macho_strip_ptr(ru64(mp + 16));
+        }
+        if (imp) {
+            out[(*n)++] = imp;
+        }
+    }
 }
 
 int
@@ -499,6 +491,8 @@ objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size)
     JB jb;
     const MachOSect *classlist = NULL;
     int first_class = 1;
+    uint64_t *method_imps = NULL;
+    int n_imps = 0;
 
     if (!out_buf || out_buf_size == 0) {
         return -1;
@@ -514,6 +508,8 @@ objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size)
         macho_map_free(&map);
         return -1;
     }
+
+    method_imps = (uint64_t *)calloc(DYLAB_MAX_TEXT_FNS, sizeof(uint64_t));
 
     jb_puts(&jb, "{\"chained_fixups\":");
     jb_puts(&jb, map.has_chained_fixups ? "true" : "false");
@@ -532,20 +528,56 @@ objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size)
             const uint8_t *slot =
                 macho_vma_to_ptr(&map, classlist->addr + i * 8, 8);
             uint64_t class_vma;
+            const uint8_t *cls;
+            uint64_t data_ptr;
+            const uint8_t *rw_or_ro;
+            uint64_t ro_vma;
+            const uint8_t *ro;
+            uint64_t methods_vma;
             if (!slot) {
                 continue;
             }
             class_vma = macho_strip_ptr(ru64(slot));
             dump_one_class(&jb, &map, class_vma, &first_class);
+
+            /* Also gather IMPs for size merge */
+            if (!method_imps) {
+                continue;
+            }
+            cls = macho_vma_to_ptr(&map, class_vma, 40);
+            if (!cls) {
+                continue;
+            }
+            data_ptr = macho_strip_ptr(ru64(cls + 32));
+            rw_or_ro = macho_vma_to_ptr(&map, data_ptr, 16);
+            if (!rw_or_ro) {
+                continue;
+            }
+            {
+                uint64_t maybe_ro = macho_strip_ptr(ru64(rw_or_ro + 8));
+                if (macho_vma_to_ptr(&map, maybe_ro, 48)) {
+                    ro_vma = maybe_ro;
+                } else {
+                    ro_vma = data_ptr;
+                }
+            }
+            ro = macho_vma_to_ptr(&map, ro_vma, 48);
+            if (!ro) {
+                continue;
+            }
+            methods_vma = macho_strip_ptr(ru64(ro + 32));
+            collect_method_imps_from_list(&map, methods_vma, method_imps,
+                                          &n_imps, DYLAB_MAX_TEXT_FNS);
         }
     }
 
     jb_puts(&jb, "],");
-    dump_callables(&jb, &map);
+    dump_callables(&jb, &map, method_imps, n_imps);
     jb_puts(&jb, "}");
 
     snprintf(out_buf, out_buf_size, "%s", jb.data ? jb.data : "{}");
     free(jb.data);
+    free(method_imps);
     macho_map_free(&map);
     return 0;
 }

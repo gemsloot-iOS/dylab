@@ -32,7 +32,7 @@ struct FunctionDecompilerView: View {
                 runDecompile()
             }
 
-            Text("off \(fileOffset)  vma \(String(format: "0x%llx", vma))")
+            Text("off \(fileOffset)  vma \(String(format: "0x%llx", vma))  size \(size)")
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
