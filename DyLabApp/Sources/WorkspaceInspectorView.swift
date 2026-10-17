@@ -26,11 +26,19 @@ struct WorkspaceInspectorView: View {
 
                 if workspaces.isEmpty {
                     Section {
-                        ContentUnavailableView(
-                            "No Workspaces",
-                            systemImage: "folder.fill",
-                            description: Text("Extract the sample tweak or import a .deb / .dylib.")
-                        )
+                        VStack(spacing: 8) {
+                            Image(systemName: "folder.fill")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No Workspaces")
+                                .font(.headline)
+                            Text("Extract the sample tweak or import a .deb / .dylib.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                     }
                 } else {
                     ForEach(workspaces, id: \.path) { workspace in
@@ -74,24 +82,7 @@ struct WorkspaceInspectorView: View {
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Workspaces")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        extractBundledSample()
-                    } label: {
-                        Label("Sample", systemImage: "shippingbox.fill")
-                    }
-                    .disabled(isBusy)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showDocumentPicker = true
-                    } label: {
-                        Label("Import", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(isBusy)
-                }
-            }
+            .toolbar { workspacesToolbar }
             .confirmationDialog(
                 "Delete Workspace?",
                 isPresented: $confirmDelete,
@@ -135,6 +126,26 @@ struct WorkspaceInspectorView: View {
                 )
                 .ignoresSafeArea()
             }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var workspacesToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+                extractBundledSample()
+            } label: {
+                Label("Sample", systemImage: "shippingbox.fill")
+            }
+            .disabled(isBusy)
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                showDocumentPicker = true
+            } label: {
+                Label("Import", systemImage: "square.and.arrow.up")
+            }
+            .disabled(isBusy)
         }
     }
 

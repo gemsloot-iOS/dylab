@@ -72,17 +72,20 @@ struct FunctionDecompilerView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    UIPasteboard.general.string = output
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                .disabled(isBusy || output.isEmpty)
-            }
-        }
+        .toolbar { decompilerToolbar }
         .onAppear(perform: runDecompile)
+    }
+
+    @ToolbarContentBuilder
+    private var decompilerToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                UIPasteboard.general.string = output
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(isBusy || output.isEmpty)
+        }
     }
 
     private func runDecompile() {

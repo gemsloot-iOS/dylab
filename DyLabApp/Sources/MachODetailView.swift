@@ -49,26 +49,29 @@ struct MachODetailView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(dylibURL.lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if selectedTab == 2 {
-                    Button {
-                        generateSource()
-                    } label: {
-                        Label("Generate", systemImage: "doc.text.fill")
-                    }
-                    .disabled(isBusy)
+        .toolbar { machOToolbar }
+        .onAppear(perform: loadAll)
+    }
 
-                    Button {
-                        saveSource()
-                    } label: {
-                        Label("Save", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(isBusy || tweakPath == nil)
+    @ToolbarContentBuilder
+    private var machOToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
+            if selectedTab == 2 {
+                Button {
+                    generateSource()
+                } label: {
+                    Label("Generate", systemImage: "doc.text.fill")
                 }
+                .disabled(isBusy)
+
+                Button {
+                    saveSource()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .disabled(isBusy || tweakPath == nil)
             }
         }
-        .onAppear(perform: loadAll)
     }
 
     @ViewBuilder

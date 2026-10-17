@@ -45,16 +45,19 @@ struct WasiSandboxView: View {
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
             .navigationTitle("WASI Sandbox")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        UIPasteboard.general.string = consoleText
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                    .disabled(consoleText.isEmpty)
-                }
+            .toolbar { wasiToolbar }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var wasiToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                UIPasteboard.general.string = consoleText
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
             }
+            .disabled(consoleText.isEmpty)
         }
     }
 
