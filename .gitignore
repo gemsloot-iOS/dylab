@@ -32,3 +32,4 @@ Deps/wamr-ios/include/*
 *.o
 *.a
 !Deps/wamr-ios/lib/.gitkeep
+workspace_test.txt
