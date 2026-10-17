@@ -55,6 +55,13 @@ struct WorkspaceInspectorView: View {
                                 }
                             }
                         }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                deleteWorkspace(workspace)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -134,10 +141,23 @@ struct WorkspaceInspectorView: View {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )) ?? []
+        // Hide empty failed extracts (no .dylib) from the workspace list.
         workspaces = contents.filter { url in
             (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                && !dylibs(in: url).isEmpty
         }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    private func deleteWorkspace(_ workspace: URL) {
+        try? FileManager.default.removeItem(at: workspace)
+        if selectedDylibPath == workspace.lastPathComponent {
+            showMachODetail = false
+            machoJSON = ""
+            selectedDylibPath = nil
+        }
+        refreshWorkspaces()
+        statusMessage = "Deleted workspace \(workspace.lastPathComponent)"
     }
 
     private func extractBundledSample() {

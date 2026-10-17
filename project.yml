@@ -22,6 +22,7 @@ targets:
     sources:
       - path: DyLabApp/Sources
       - path: DyLabApp/Bridge
+      - path: Deps/zstd/zstddeclib.c
       - path: DyLabApp/Resources
         buildPhase: resources
     info:
@@ -85,6 +86,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: DyLabApp/Bridge/DyLab-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/include
+          - $(SRCROOT)/Deps/zstd
         LIBRARY_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/lib
         OTHER_LDFLAGS:
@@ -92,6 +94,7 @@ targets:
           - -lc++
           - -lcompression
           - -lz
+          - -lbz2
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
