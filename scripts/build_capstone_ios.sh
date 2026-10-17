@@ -78,16 +78,9 @@ make -j"${NCPU}" \
   LDFLAGS="${LDFLAGS}"
 
 FOUND_LIB=""
-for candidate in \
-
-  ; do
-  if [[ -f "${candidate}" ]]; then
-    FOUND_LIB="${candidate}"
-    break
-  fi
-done
-# Also search under CAPSTONE_SRC
-if [[ -z "${FOUND_LIB}" ]]; then
+if [[ -f "${CAPSTONE_SRC}/libcapstone.a" ]]; then
+  FOUND_LIB="${CAPSTONE_SRC}/libcapstone.a"
+else
   FOUND_LIB="$(find "${CAPSTONE_SRC}" -maxdepth 2 -name 'libcapstone.a' -print -quit || true)"
 fi
 
