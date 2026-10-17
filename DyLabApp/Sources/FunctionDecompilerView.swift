@@ -12,7 +12,7 @@ struct FunctionDecompilerView: View {
     @State private var output = "Decompiling…"
     @State private var isBusy = false
 
-    private let modeLabels = ["Pseudo-C", "ARM64", "Ghidra (3B)"]
+    private let modeLabels = ["Pseudo-C", "ARM64", "Structured (3B)"]
     private let modes: [DecompileMode] = [
         DECOMPILE_MODE_HEURISTIC_C,
         DECOMPILE_MODE_DISASM,

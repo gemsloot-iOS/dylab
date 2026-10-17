@@ -1,5 +1,6 @@
 #include "DecompilerEngine.h"
 #include "MachOMap.h"
+#include "StructuredDecompiler.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -1010,14 +1011,9 @@ decompile_function(const char *path,
     out_buf[0] = '\0';
 
     if (mode == DECOMPILE_MODE_GHIDRA_C) {
-        snprintf(out_buf, out_buf_size,
-                 "// Phase 3B placeholder: Ghidra/rz-ghidra C decompilation\n"
-                 "// Not available in Phase 3A. Enable DECOMPILE_MODE_GHIDRA_C\n"
-                 "// once librz + rz-ghidra are wired.\n"
-                 "// requested: %s off=0x%llx size=%llu\n",
-                 path, (unsigned long long)file_offset,
-                 (unsigned long long)size);
-        return 0;
+        /* Phase 3B: Capstone-based structured decompiler (CFG + folding). */
+        return structured_decompile(path, file_offset, size, vma_hint, out_buf,
+                                    out_buf_size);
     }
 
     if (macho_map_load(path, &map) != 0) {
