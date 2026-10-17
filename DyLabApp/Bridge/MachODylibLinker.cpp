@@ -65,8 +65,12 @@ struct dysymtab_command {
     uint32_t tocoff, ntoc, modtaboff, nmodtab, extrefsymoff, nextrefsyms;
     uint32_t indirectsymoff, nindirectsyms, extreloff, nextrel, locreloff, nlocrel;
 };
+union lc_str {
+    uint32_t offset;
+};
 struct dylib {
-    uint32_t name, timestamp, current_version, compatibility_version;
+    union lc_str name;
+    uint32_t timestamp, current_version, compatibility_version;
 };
 struct dylib_command {
     uint32_t cmd, cmdsize;
@@ -1103,7 +1107,7 @@ dylab_link_elf_to_dylib(const char *elf_path,
         dylib_command dc{};
         dc.cmd = LC_ID_DYLIB;
         dc.cmdsize = id_cmdsize;
-        dc.dylib.name = sizeof(dylib_command);
+        dc.dylib.name.offset = sizeof(dylib_command);
         dc.dylib.timestamp = 1;
         dc.dylib.current_version = 0x10000;
         dc.dylib.compatibility_version = 0x10000;
@@ -1118,7 +1122,7 @@ dylab_link_elf_to_dylib(const char *elf_path,
         dylib_command dc{};
         dc.cmd = LC_LOAD_DYLIB;
         dc.cmdsize = sz;
-        dc.dylib.name = sizeof(dylib_command);
+        dc.dylib.name.offset = sizeof(dylib_command);
         dc.dylib.timestamp = 2;
         dc.dylib.current_version = 0x10000;
         dc.dylib.compatibility_version = 0x10000;
