@@ -3,7 +3,8 @@ import UniformTypeIdentifiers
 
 struct WorkspaceInspectorView: View {
     @State private var workspaces: [URL] = []
-    @State private var selectedDylib: URL?
+    @State private var selectedDylibPath: String?
+    @State private var showMachODetail = false
     @State private var machoJSON = ""
     @State private var statusMessage = ""
     @State private var isBusy = false
@@ -62,18 +63,28 @@ struct WorkspaceInspectorView: View {
                 }
                 .listStyle(.insetGrouped)
 
-                if selectedDylib != NULL {
-                    ScrollView {
-                        Text(machoJSON.isEmpty ? "(no report)" : machoJSON)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .padding(8)
+                // Use Bool (not Optional URL?) in ViewBuilder — avoids iOS 16
+                // "URL? to ()" overload ambiguity under NavigationStack.
+                if showMachODetail {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let selectedDylibPath {
+                            Text(selectedDylibPath)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        ScrollView {
+                            Text(machoJSON.isEmpty ? "(no report)" : machoJSON)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .frame(minHeight: 180)
+                        .background(Color(white: 0.08))
+                        .foregroundStyle(Color(white: 0.92))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    .frame(minHeight: 180)
-                    .background(Color(white: 0.08))
-                    .foregroundStyle(Color(white: 0.92))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
             }
             .padding()
@@ -198,7 +209,8 @@ struct WorkspaceInspectorView: View {
     }
 
     private func inspect(dylib: URL) {
-        selectedDylib = dylib
+        selectedDylibPath = dylib.lastPathComponent
+        showMachODetail = true
         machoJSON = "Inspecting \(dylib.lastPathComponent)…"
         DispatchQueue.global(qos: .userInitiated).async {
             var buf = [CChar](repeating: 0, count: 512 * 1024)
