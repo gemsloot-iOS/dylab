@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,7 +118,12 @@ run_wasi_tool(const char *wasm_path,
     char *default_argv0[] = { (char *)"hello.wasm", NULL };
     char **wasi_argv = argv;
     int wasi_argc = argc;
+    char resolved_root[PATH_MAX];
+    char map_dot[PATH_MAX + 8];
+    char map_workspace[PATH_MAX + 16];
     const char *dir_list[1];
+    const char *map_dir_list[2];
+    const char *env_list[2];
 
     if (output_buf != NULL && output_buf_size > 0) {
         output_buf[0] = '\0';
@@ -128,6 +134,32 @@ run_wasi_tool(const char *wasm_path,
                     "error: wasm_path and sandbox_root_dir are required\n");
         return -1;
     }
+
+    if (realpath(sandbox_root_dir, resolved_root) == NULL) {
+        append_text(output_buf, output_buf_size, &out_used,
+                    "error: realpath(sandbox_root_dir) failed: ");
+        append_text(output_buf, output_buf_size, &out_used, strerror(errno));
+        append_text(output_buf, output_buf_size, &out_used, "\n");
+        return -1;
+    }
+
+    if (chdir(resolved_root) != 0) {
+        append_text(output_buf, output_buf_size, &out_used,
+                    "error: chdir(resolved sandbox) failed: ");
+        append_text(output_buf, output_buf_size, &out_used, strerror(errno));
+        append_text(output_buf, output_buf_size, &out_used, "\n");
+        return -1;
+    }
+
+    /* Guest preopens at "." and "/workspace", not the long iOS host path. */
+    snprintf(map_dot, sizeof(map_dot), ".::%s", resolved_root);
+    snprintf(map_workspace, sizeof(map_workspace), "/workspace::%s",
+             resolved_root);
+    dir_list[0] = ".";
+    map_dir_list[0] = map_dot;
+    map_dir_list[1] = map_workspace;
+    env_list[0] = "HOME=/workspace";
+    env_list[1] = "PWD=/workspace";
 
     memset(&init_args, 0, sizeof(RuntimeInitArgs));
     init_args.mem_alloc_type = Alloc_With_Pool;
@@ -163,9 +195,8 @@ run_wasi_tool(const char *wasm_path,
         wasi_argc = 1;
     }
 
-    dir_list[0] = sandbox_root_dir;
-    wasm_runtime_set_wasi_args(module, dir_list, 1, NULL, 0, NULL, 0, wasi_argv,
-                               wasi_argc);
+    wasm_runtime_set_wasi_args(module, dir_list, 1, map_dir_list, 2, env_list, 2,
+                               wasi_argv, wasi_argc);
 
     module_inst = wasm_runtime_instantiate(module, WASM_STACK_SIZE, WASM_HEAP_SIZE,
                                            error_buf, (uint32_t)sizeof(error_buf));
@@ -198,7 +229,6 @@ run_wasi_tool(const char *wasm_path,
         goto cleanup;
     }
 
-    /* stdout/stderr hold the write end; close the extra FD. */
     close(pipe_fds[1]);
     pipe_fds[1] = -1;
 

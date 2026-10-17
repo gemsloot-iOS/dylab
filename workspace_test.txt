@@ -1,0 +1,1 @@
+WASI File I/O is working on iOS!
