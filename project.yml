@@ -22,8 +22,56 @@ targets:
     sources:
       - path: DyLabApp/Sources
       - path: DyLabApp/Bridge
+      - path: Deps/zstd/zstddeclib.c
       - path: DyLabApp/Resources
         buildPhase: resources
+    info:
+      path: DyLabApp/Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.debian.deb-archive
+            UTTypeDescription: Debian Package
+            UTTypeConformsTo:
+              - public.data
+              - public.archive
+              - public.item
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - deb
+          - UTTypeIdentifier: com.apple.mach-o-dylib
+            UTTypeDescription: Mach-O Dynamic Library
+            UTTypeConformsTo:
+              - public.data
+              - public.unix-executable
+              - public.executable
+              - public.item
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - dylib
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Debian Package
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - org.debian.deb-archive
+            CFBundleTypeExtensions:
+              - deb
+          - CFBundleTypeName: Mach-O Dynamic Library
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.apple.mach-o-dylib
+            CFBundleTypeExtensions:
+              - dylib
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dylab.app
@@ -38,11 +86,15 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: DyLabApp/Bridge/DyLab-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/include
+          - $(SRCROOT)/Deps/zstd
         LIBRARY_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/lib
         OTHER_LDFLAGS:
           - -liwasm
           - -lc++
+          - -lcompression
+          - -lz
+          - -lbz2
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""

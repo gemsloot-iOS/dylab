@@ -26,6 +26,9 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Build sample_tweak.deb
+        run: bash scripts/build_sample_deb.sh
+
       - name: Generate Xcode project
         run: xcodegen generate
 
