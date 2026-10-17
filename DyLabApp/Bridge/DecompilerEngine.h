@@ -11,7 +11,7 @@ extern "C" {
 typedef enum {
     DECOMPILE_MODE_DISASM = 0,
     DECOMPILE_MODE_HEURISTIC_C = 1,
-    DECOMPILE_MODE_GHIDRA_C = 2
+    DECOMPILE_MODE_STRUCTURED = 2
 } DecompileMode;
 
 /**

@@ -677,7 +677,7 @@ emit_method_body_from_decompile(FILE *f, const char *dylib_path, uint64_t imp,
     }
     size = 0; /* engine derives from function starts */
     rc = decompile_function(dylib_path, file_off, size, imp,
-                            DECOMPILE_MODE_GHIDRA_C, buf, 256 * 1024);
+                            DECOMPILE_MODE_STRUCTURED, buf, 256 * 1024);
     if (rc != 0 && (!buf[0])) {
         fprintf(f, "    return nil; /* decompile failed */\n");
         free(buf);

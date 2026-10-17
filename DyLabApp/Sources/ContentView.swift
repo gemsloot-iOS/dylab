@@ -5,12 +5,12 @@ struct ContentView: View {
         TabView {
             WorkspaceInspectorView()
                 .tabItem {
-                    Label("Workspaces", systemImage: "folder")
+                    Label("Workspaces", systemImage: "folder.fill")
                 }
 
             WasiSandboxView()
                 .tabItem {
-                    Label("WASI Sandbox", systemImage: "terminal")
+                    Label("WASI Sandbox", systemImage: "terminal.fill")
                 }
         }
     }

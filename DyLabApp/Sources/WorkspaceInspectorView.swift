@@ -6,6 +6,8 @@ struct WorkspaceInspectorView: View {
     @State private var statusMessage = ""
     @State private var isBusy = false
     @State private var showDocumentPicker = false
+    @State private var workspacePendingDelete: URL?
+    @State private var confirmDelete = false
 
     private var workspacesRoot: URL {
         DyLabFileImport.workspacesRoot
@@ -13,56 +15,102 @@ struct WorkspaceInspectorView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    Button("Extract sample_tweak.deb") {
-                        extractBundledSample()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isBusy)
-
-                    Button("Import .deb / .dylib") {
-                        showDocumentPicker = true
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(isBusy)
-                }
-
+            List {
                 if !statusMessage.isEmpty {
-                    Text(statusMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Section {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
-                List {
+                if workspaces.isEmpty {
+                    Section {
+                        ContentUnavailableView(
+                            "No Workspaces",
+                            systemImage: "folder.fill",
+                            description: Text("Extract the sample tweak or import a .deb / .dylib.")
+                        )
+                    }
+                } else {
                     ForEach(workspaces, id: \.path) { workspace in
-                        Section(workspace.lastPathComponent) {
+                        Section {
                             ForEach(dylibs(in: workspace), id: \.path) { dylib in
                                 NavigationLink {
                                     MachODetailView(dylibURL: dylib, workspaceURL: workspace)
                                 } label: {
-                                    HStack {
+                                    Label {
                                         Text(dylib.lastPathComponent)
                                             .font(.body.monospaced())
-                                        Spacer()
+                                    } icon: {
+                                        Image(systemName: "doc.text.fill")
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
                             }
+                        } header: {
+                            Label(workspace.lastPathComponent, systemImage: "folder.fill")
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
-                                deleteWorkspace(workspace)
+                                workspacePendingDelete = workspace
+                                confirmDelete = true
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                workspacePendingDelete = workspace
+                                confirmDelete = true
+                            } label: {
+                                Label("Delete Workspace", systemImage: "trash")
+                            }
+                        }
                     }
                 }
-                .listStyle(.insetGrouped)
             }
-            .padding()
-            .navigationTitle("Workspaces & Inspector")
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Workspaces")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        extractBundledSample()
+                    } label: {
+                        Label("Sample", systemImage: "shippingbox.fill")
+                    }
+                    .disabled(isBusy)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showDocumentPicker = true
+                    } label: {
+                        Label("Import", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isBusy)
+                }
+            }
+            .confirmationDialog(
+                "Delete Workspace?",
+                isPresented: $confirmDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let workspacePendingDelete {
+                        deleteWorkspace(workspacePendingDelete)
+                    }
+                    workspacePendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    workspacePendingDelete = nil
+                }
+            } message: {
+                if let workspacePendingDelete {
+                    Text("Remove \(workspacePendingDelete.lastPathComponent) and its files?")
+                }
+            }
             .onAppear(perform: refreshWorkspaces)
             .onReceive(NotificationCenter.default.publisher(for: .dylabImportStatus)) { note in
                 if let message = note.userInfo?["message"] as? String {
@@ -112,7 +160,6 @@ struct WorkspaceInspectorView: View {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        // Hide empty failed extracts (no .dylib) from the workspace list.
         workspaces = contents.filter { url in
             (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                 && !dylibs(in: url).isEmpty
@@ -128,7 +175,7 @@ struct WorkspaceInspectorView: View {
 
     private func extractBundledSample() {
         guard let debURL = Bundle.main.url(forResource: "sample_tweak", withExtension: "deb") else {
-            statusMessage = "sample_tweak.deb not found in app bundle (CI builds it via scripts/build_sample_deb.sh)"
+            statusMessage = "sample_tweak.deb not found in app bundle"
             return
         }
         isBusy = true
@@ -145,7 +192,7 @@ struct WorkspaceInspectorView: View {
             DispatchQueue.main.async {
                 isBusy = false
                 if rc == 0 {
-                    statusMessage = "Extracted sample_tweak → Workspaces/sample_tweak"
+                    statusMessage = "Extracted sample_tweak"
                 } else {
                     statusMessage = "Extract failed: \(String(cString: err))"
                 }

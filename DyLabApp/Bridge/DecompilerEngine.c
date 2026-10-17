@@ -1010,7 +1010,7 @@ decompile_function(const char *path,
     }
     out_buf[0] = '\0';
 
-    if (mode == DECOMPILE_MODE_GHIDRA_C) {
+    if (mode == DECOMPILE_MODE_STRUCTURED) {
         /* Phase 3B: Capstone-based structured decompiler (CFG + folding). */
         return structured_decompile(path, file_offset, size, vma_hint, out_buf,
                                     out_buf_size);
