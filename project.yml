@@ -87,10 +87,13 @@ targets:
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/include
           - $(SRCROOT)/Deps/zstd
+          - $(SRCROOT)/Deps/capstone-ios/include
         LIBRARY_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/lib
+          - $(SRCROOT)/Deps/capstone-ios/lib
         OTHER_LDFLAGS:
           - -liwasm
+          - -lcapstone
           - -lc++
           - -lcompression
           - -lz

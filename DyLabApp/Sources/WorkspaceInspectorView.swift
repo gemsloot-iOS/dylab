@@ -3,9 +3,6 @@ import UniformTypeIdentifiers
 
 struct WorkspaceInspectorView: View {
     @State private var workspaces: [URL] = []
-    @State private var selectedDylibPath: String?
-    @State private var showMachODetail = false
-    @State private var machoJSON = ""
     @State private var statusMessage = ""
     @State private var isBusy = false
     @State private var showDocumentPicker = false
@@ -42,15 +39,13 @@ struct WorkspaceInspectorView: View {
                     ForEach(workspaces, id: \.path) { workspace in
                         Section(workspace.lastPathComponent) {
                             ForEach(dylibs(in: workspace), id: \.path) { dylib in
-                                Button {
-                                    inspect(dylib: dylib)
+                                NavigationLink {
+                                    MachODetailView(dylibURL: dylib, workspaceURL: workspace)
                                 } label: {
                                     HStack {
                                         Text(dylib.lastPathComponent)
                                             .font(.body.monospaced())
                                         Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -65,30 +60,6 @@ struct WorkspaceInspectorView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
-
-                // Use Bool (not Optional URL?) in ViewBuilder — avoids iOS 16
-                // "URL? to ()" overload ambiguity under NavigationStack.
-                if showMachODetail {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let selectedDylibPath {
-                            Text(selectedDylibPath)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                        ScrollView {
-                            Text(machoJSON.isEmpty ? "(no report)" : machoJSON)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(8)
-                        }
-                        .frame(minHeight: 180)
-                        .background(Color(white: 0.08))
-                        .foregroundStyle(Color(white: 0.92))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
             }
             .padding()
             .navigationTitle("Workspaces & Inspector")
@@ -151,11 +122,6 @@ struct WorkspaceInspectorView: View {
 
     private func deleteWorkspace(_ workspace: URL) {
         try? FileManager.default.removeItem(at: workspace)
-        if selectedDylibPath == workspace.lastPathComponent {
-            showMachODetail = false
-            machoJSON = ""
-            selectedDylibPath = nil
-        }
         refreshWorkspaces()
         statusMessage = "Deleted workspace \(workspace.lastPathComponent)"
     }
@@ -196,30 +162,5 @@ struct WorkspaceInspectorView: View {
             statusMessage = message
             refreshWorkspaces()
         }
-    }
-
-    private func inspect(dylib: URL) {
-        selectedDylibPath = dylib.lastPathComponent
-        showMachODetail = true
-        machoJSON = "Inspecting \(dylib.lastPathComponent)…"
-        DispatchQueue.global(qos: .userInitiated).async {
-            var buf = [CChar](repeating: 0, count: 512 * 1024)
-            let rc = inspect_macho(dylib.path, &buf, buf.count)
-            let text = String(cString: buf)
-            let pretty = prettyJSON(text) ?? text
-            DispatchQueue.main.async {
-                machoJSON = rc == 0 ? pretty : "inspect_macho failed (\(rc))\n\(pretty)"
-            }
-        }
-    }
-
-    private func prettyJSON(_ raw: String) -> String? {
-        guard let data = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data),
-              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: pretty, encoding: .utf8) else {
-            return nil
-        }
-        return text
     }
 }
