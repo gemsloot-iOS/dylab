@@ -25,6 +25,8 @@ targets:
       - path: Deps/zstd/zstddeclib.c
       - path: DyLabApp/Resources
         buildPhase: resources
+        excludes:
+          - SDK/**
     info:
       path: DyLabApp/Info.plist
       properties:
@@ -87,15 +89,15 @@ targets:
         CLANG_CXX_LANGUAGE_STANDARD: c++17
         CLANG_CXX_LIBRARY: libc++
         HEADER_SEARCH_PATHS:
-          - $(SRCROOT)/Deps/wamr-ios/include
           - $(SRCROOT)/Deps/zstd
           - $(SRCROOT)/Deps/capstone-ios/include
+          - $(SRCROOT)/Deps/tcc-ios/include
         LIBRARY_SEARCH_PATHS:
-          - $(SRCROOT)/Deps/wamr-ios/lib
           - $(SRCROOT)/Deps/capstone-ios/lib
+          - $(SRCROOT)/Deps/tcc-ios/lib
         OTHER_LDFLAGS:
-          - -liwasm
           - -lcapstone
+          - -ltcc
           - -lc++
           - -lcompression
           - -lz

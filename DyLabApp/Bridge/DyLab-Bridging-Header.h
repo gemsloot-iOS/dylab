@@ -1,4 +1,3 @@
-#import "WasmRunner.h"
 #import "DebExtractor.h"
 #import "MachOInspector.h"
 #import "ObjCDumper.h"

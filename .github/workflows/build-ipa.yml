@@ -12,14 +12,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache WAMR iOS artifacts
-        uses: actions/cache@v4
-        with:
-          path: Deps/wamr-ios
-          key: wamr-ios-${{ hashFiles('scripts/build_wamr_ios.sh') }}
-          restore-keys: |
-            wamr-ios-
-
       - name: Cache Capstone iOS artifacts
         uses: actions/cache@v4
         with:
@@ -28,11 +20,19 @@ jobs:
           restore-keys: |
             capstone-ios-
 
-      - name: Build WAMR for iOS
-        run: bash scripts/build_wamr_ios.sh
+      - name: Cache TinyCC iOS artifacts
+        uses: actions/cache@v4
+        with:
+          path: Deps/tcc-ios
+          key: tcc-ios-${{ hashFiles('scripts/build_tcc_ios.sh') }}
+          restore-keys: |
+            tcc-ios-
 
       - name: Build Capstone for iOS
         run: bash scripts/build_capstone_ios.sh
+
+      - name: Build TinyCC for iOS
+        run: bash scripts/build_tcc_ios.sh
 
       - name: Install XcodeGen
         run: brew install xcodegen

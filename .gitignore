@@ -13,23 +13,23 @@ Package.resolved
 # macOS
 .DS_Store
 
-# WAMR source checkout (cloned by scripts/build_wamr_ios.sh)
-Deps/wasm-micro-runtime/
-
 # Capstone source checkout (cloned by scripts/build_capstone_ios.sh)
 Deps/capstone/
 
-# Built WAMR iOS artifacts (produced on CI / locally by the script)
-Deps/wamr-ios/lib/*
-!Deps/wamr-ios/lib/.gitkeep
-Deps/wamr-ios/include/*
-!Deps/wamr-ios/include/.gitkeep
+# TinyCC source checkout (cloned by scripts/build_tcc_ios.sh)
+Deps/tinycc/
 
 # Built Capstone iOS artifacts (produced on CI / locally by the script)
 Deps/capstone-ios/lib/*
 !Deps/capstone-ios/lib/.gitkeep
 Deps/capstone-ios/include/*
 !Deps/capstone-ios/include/.gitkeep
+
+# Built TinyCC iOS artifacts
+Deps/tcc-ios/lib/*
+!Deps/tcc-ios/lib/.gitkeep
+Deps/tcc-ios/include/*
+!Deps/tcc-ios/include/.gitkeep
 
 # Editor / IDE
 .idea/
@@ -40,5 +40,4 @@ Deps/capstone-ios/include/*
 /tmp/
 *.o
 *.a
-!Deps/wamr-ios/lib/.gitkeep
 workspace_test.txt
