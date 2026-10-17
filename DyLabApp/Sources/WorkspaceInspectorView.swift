@@ -8,14 +8,10 @@ struct WorkspaceInspectorView: View {
     @State private var machoJSON = ""
     @State private var statusMessage = ""
     @State private var isBusy = false
-    @State private var showImporter = false
-
-    private var documentsURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-    }
+    @State private var showDocumentPicker = false
 
     private var workspacesRoot: URL {
-        documentsURL.appendingPathComponent("Workspaces", isDirectory: true)
+        DyLabFileImport.workspacesRoot
     }
 
     var body: some View {
@@ -29,7 +25,7 @@ struct WorkspaceInspectorView: View {
                     .disabled(isBusy)
 
                     Button("Import .deb / .dylib") {
-                        showImporter = true
+                        showDocumentPicker = true
                     }
                     .buttonStyle(.bordered)
                     .disabled(isBusy)
@@ -90,19 +86,28 @@ struct WorkspaceInspectorView: View {
             .padding()
             .navigationTitle("Workspaces & Inspector")
             .onAppear(perform: refreshWorkspaces)
-            .fileImporter(
-                isPresented: $showImporter,
-                allowedContentTypes: [.item, .data],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    if let url = urls.first {
-                        importFile(url)
-                    }
-                case .failure(let error):
-                    statusMessage = "Import failed: \(error.localizedDescription)"
+            .onReceive(NotificationCenter.default.publisher(for: .dylabImportStatus)) { note in
+                if let message = note.userInfo?["message"] as? String {
+                    isBusy = false
+                    statusMessage = message
+                    refreshWorkspaces()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .dylabImportURL)) { _ in
+                isBusy = true
+                statusMessage = "Importing via Open in DyLab…"
+            }
+            .sheet(isPresented: $showDocumentPicker) {
+                DocumentPicker(
+                    onPick: { url in
+                        showDocumentPicker = false
+                        importPickedFile(url)
+                    },
+                    onCancel: {
+                        showDocumentPicker = false
+                    }
+                )
+                .ignoresSafeArea()
             }
         }
     }
@@ -163,68 +168,13 @@ struct WorkspaceInspectorView: View {
         }
     }
 
-    private func importFile(_ url: URL) {
-        let ext = url.pathExtension.lowercased()
-        guard ext == "deb" || ext == "dylib" else {
-            statusMessage = "Unsupported file type: .\(ext) (use .deb or .dylib)"
-            return
-        }
-
+    private func importPickedFile(_ url: URL) {
         isBusy = true
         statusMessage = "Importing \(url.lastPathComponent)…"
-
-        // Hold security-scoped access only long enough to copy into Documents.
-        let gotAccess = url.startAccessingSecurityScopedResource()
-        defer {
-            if gotAccess {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        let stagingDir = documentsURL.appendingPathComponent("ImportStaging", isDirectory: true)
-        try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-        let staged = stagingDir.appendingPathComponent(url.lastPathComponent)
-
-        do {
-            if FileManager.default.fileExists(atPath: staged.path) {
-                try FileManager.default.removeItem(at: staged)
-            }
-            try FileManager.default.copyItem(at: url, to: staged)
-        } catch {
+        DyLabFileImport.importURLAsync(url) { message in
             isBusy = false
-            statusMessage = "Import copy failed: \(error.localizedDescription)"
-            return
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            var err = [CChar](repeating: 0, count: 2048)
-            var message = ""
-            if ext == "deb" {
-                let name = staged.deletingPathExtension().lastPathComponent
-                let rc = extract_deb_to_workspace(
-                    staged.path,
-                    workspacesRoot.path,
-                    name,
-                    &err,
-                    err.count
-                )
-                message = rc == 0
-                    ? "Extracted \(staged.lastPathComponent) → Workspaces/\(name)"
-                    : "Extract failed: \(String(cString: err))"
-            } else {
-                let ws = workspacesRoot.appendingPathComponent("imported", isDirectory: true)
-                try? FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
-                let rc = import_dylib_to_workspace(staged.path, ws.path, &err, err.count)
-                message = rc == 0
-                    ? "Imported \(staged.lastPathComponent) → Workspaces/imported"
-                    : "Import failed: \(String(cString: err))"
-            }
-
-            DispatchQueue.main.async {
-                isBusy = false
-                statusMessage = message
-                refreshWorkspaces()
-            }
+            statusMessage = message
+            refreshWorkspaces()
         }
     }
 

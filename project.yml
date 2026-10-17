@@ -24,6 +24,52 @@ targets:
       - path: DyLabApp/Bridge
       - path: DyLabApp/Resources
         buildPhase: resources
+    info:
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: org.debian.deb-archive
+            UTTypeDescription: Debian Package
+            UTTypeConformsTo:
+              - public.data
+              - public.archive
+              - public.item
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - deb
+          - UTTypeIdentifier: com.apple.mach-o-dylib
+            UTTypeDescription: Mach-O Dynamic Library
+            UTTypeConformsTo:
+              - public.data
+              - public.unix-executable
+              - public.executable
+              - public.item
+              - public.content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - dylib
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Debian Package
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - org.debian.deb-archive
+            CFBundleTypeExtensions:
+              - deb
+          - CFBundleTypeName: Mach-O Dynamic Library
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.apple.mach-o-dylib
+            CFBundleTypeExtensions:
+              - dylib
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.dylab.app
