@@ -92,7 +92,7 @@ struct WorkspaceInspectorView: View {
             .onAppear(perform: refreshWorkspaces)
             .fileImporter(
                 isPresented: $showImporter,
-                allowedContentTypes: [.data, .unixExecutable, .item],
+                allowedContentTypes: [.item, .data],
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
@@ -164,40 +164,60 @@ struct WorkspaceInspectorView: View {
     }
 
     private func importFile(_ url: URL) {
-        let accessed = url.startAccessingSecurityScopedResource()
+        let ext = url.pathExtension.lowercased()
+        guard ext == "deb" || ext == "dylib" else {
+            statusMessage = "Unsupported file type: .\(ext) (use .deb or .dylib)"
+            return
+        }
+
+        isBusy = true
+        statusMessage = "Importing \(url.lastPathComponent)…"
+
+        // Hold security-scoped access only long enough to copy into Documents.
+        let gotAccess = url.startAccessingSecurityScopedResource()
         defer {
-            if accessed {
+            if gotAccess {
                 url.stopAccessingSecurityScopedResource()
             }
         }
 
-        let ext = url.pathExtension.lowercased()
-        isBusy = true
+        let stagingDir = documentsURL.appendingPathComponent("ImportStaging", isDirectory: true)
+        try? FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        let staged = stagingDir.appendingPathComponent(url.lastPathComponent)
+
+        do {
+            if FileManager.default.fileExists(atPath: staged.path) {
+                try FileManager.default.removeItem(at: staged)
+            }
+            try FileManager.default.copyItem(at: url, to: staged)
+        } catch {
+            isBusy = false
+            statusMessage = "Import copy failed: \(error.localizedDescription)"
+            return
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            var err = [CChar](repeating: 0, count: 1024)
+            var err = [CChar](repeating: 0, count: 2048)
             var message = ""
             if ext == "deb" {
-                let name = url.deletingPathExtension().lastPathComponent
+                let name = staged.deletingPathExtension().lastPathComponent
                 let rc = extract_deb_to_workspace(
-                    url.path,
+                    staged.path,
                     workspacesRoot.path,
                     name,
                     &err,
                     err.count
                 )
                 message = rc == 0
-                    ? "Extracted \(url.lastPathComponent) → Workspaces/\(name)"
+                    ? "Extracted \(staged.lastPathComponent) → Workspaces/\(name)"
                     : "Extract failed: \(String(cString: err))"
-            } else if ext == "dylib" {
+            } else {
                 let ws = workspacesRoot.appendingPathComponent("imported", isDirectory: true)
                 try? FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
-                let rc = import_dylib_to_workspace(url.path, ws.path, &err, err.count)
+                let rc = import_dylib_to_workspace(staged.path, ws.path, &err, err.count)
                 message = rc == 0
-                    ? "Imported \(url.lastPathComponent) → Workspaces/imported"
+                    ? "Imported \(staged.lastPathComponent) → Workspaces/imported"
                     : "Import failed: \(String(cString: err))"
-            } else {
-                message = "Unsupported file type: .\(ext) (use .deb or .dylib)"
             }
 
             DispatchQueue.main.async {

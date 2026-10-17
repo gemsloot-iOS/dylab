@@ -17,6 +17,7 @@
 #define AR_MAGIC "!<arch>\n"
 #define AR_HEADER_SIZE 60
 #define TAR_BLOCK 512
+#define AR_NAME_MAX 255
 
 static void
 set_err(char *err_buf, size_t err_buf_size, const char *msg)
@@ -182,7 +183,6 @@ static int
 lzma_decompress(const uint8_t *src, size_t src_len, uint8_t **out_buf,
                  size_t *out_len)
 {
-    /* Guess an output size; grow if needed via scratch decode size probe. */
     size_t cap = src_len * 8 + 64 * 1024;
     for (int attempt = 0; attempt < 4; attempt++) {
         uint8_t *dst = (uint8_t *)malloc(cap);
@@ -270,7 +270,6 @@ extract_tar(const uint8_t *tar, size_t tar_len, const char *dest_root,
         offset += TAR_BLOCK;
 
         if (!is_safe_tar_name(name)) {
-            /* Skip unsafe members but advance. */
             offset += ((size + TAR_BLOCK - 1) / TAR_BLOCK) * TAR_BLOCK;
             continue;
         }
@@ -305,8 +304,6 @@ extract_tar(const uint8_t *tar, size_t tar_len, const char *dest_root,
             fclose(fp);
             offset += ((size + TAR_BLOCK - 1) / TAR_BLOCK) * TAR_BLOCK;
             continue;
-        } else {
-            /* Skip other member types. */
         }
 
         offset += ((size + TAR_BLOCK - 1) / TAR_BLOCK) * TAR_BLOCK;
@@ -316,10 +313,87 @@ extract_tar(const uint8_t *tar, size_t tar_len, const char *dest_root,
 }
 
 typedef struct {
-    char name[16];
+    char name[AR_NAME_MAX + 1];
     const uint8_t *data;
     size_t size;
 } ArMember;
+
+static void
+trim_trailing_spaces(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\n' || s[n - 1] == '\r')) {
+        s[--n] = '\0';
+    }
+}
+
+static void
+trim_trailing_slash(char *s)
+{
+    size_t n = strlen(s);
+    if (n > 0 && s[n - 1] == '/') {
+        s[n - 1] = '\0';
+    }
+}
+
+static int
+is_digits(const char *s)
+{
+    if (s == NULL || *s == '\0') {
+        return 0;
+    }
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+lookup_gnu_string_table(const char *strtab, size_t strtab_len, unsigned long off,
+                        char *out, size_t out_size)
+{
+    size_t i;
+    size_t n = 0;
+
+    if (strtab == NULL || off >= strtab_len || out_size == 0) {
+        return -1;
+    }
+    i = (size_t)off;
+    while (i < strtab_len && strtab[i] != '\0' && strtab[i] != '\n' &&
+           n + 1 < out_size) {
+        if (strtab[i] == '/' && (i + 1 >= strtab_len || strtab[i + 1] == '\n' ||
+                                 strtab[i + 1] == '\0')) {
+            break;
+        }
+        out[n++] = strtab[i++];
+    }
+    out[n] = '\0';
+    return n > 0 ? 0 : -1;
+}
+
+static int
+push_member(ArMember **members, size_t *count, size_t *cap, const char *name,
+            const uint8_t *data, size_t size, char *err_buf, size_t err_buf_size)
+{
+    if (*count == *cap) {
+        size_t ncap = *cap ? *cap * 2 : 8;
+        ArMember *nm = (ArMember *)realloc(*members, ncap * sizeof(ArMember));
+        if (nm == NULL) {
+            set_err(err_buf, err_buf_size, "out of memory");
+            return -1;
+        }
+        *members = nm;
+        *cap = ncap;
+    }
+    memset(&(*members)[*count], 0, sizeof(ArMember));
+    strncpy((*members)[*count].name, name, AR_NAME_MAX);
+    (*members)[*count].data = data;
+    (*members)[*count].size = size;
+    (*count)++;
+    return 0;
+}
 
 static int
 parse_ar(const uint8_t *buf, size_t len, ArMember **out_members, size_t *out_count,
@@ -329,6 +403,8 @@ parse_ar(const uint8_t *buf, size_t len, ArMember **out_members, size_t *out_cou
     ArMember *members = NULL;
     size_t count = 0;
     size_t cap = 0;
+    const char *gnu_strtab = NULL;
+    size_t gnu_strtab_len = 0;
 
     if (len < 8 || memcmp(buf, AR_MAGIC, 8) != 0) {
         set_err(err_buf, err_buf_size, "not a UNIX ar archive");
@@ -340,62 +416,98 @@ parse_ar(const uint8_t *buf, size_t len, ArMember **out_members, size_t *out_cou
         const char *hdr = (const char *)(buf + offset);
         char name_field[17];
         char size_field[11];
-        long member_size;
-        ArMember *slot;
+        long header_member_size;
+        const uint8_t *member_start;
+        size_t name_prefix = 0;
+        size_t payload_size;
+        char resolved_name[AR_NAME_MAX + 1];
 
         memset(name_field, 0, sizeof(name_field));
         memset(size_field, 0, sizeof(size_field));
+        memset(resolved_name, 0, sizeof(resolved_name));
         memcpy(name_field, hdr, 16);
         memcpy(size_field, hdr + 48, 10);
+        trim_trailing_spaces(name_field);
+        trim_trailing_spaces(size_field);
 
-        /* Trim trailing spaces/slashes from ar name. */
-        for (int i = 15; i >= 0; i--) {
-            if (name_field[i] == ' ' || name_field[i] == '/' ||
-                name_field[i] == '\0') {
-                name_field[i] = '\0';
-            } else {
-                break;
-            }
-        }
-
-        member_size = strtol(size_field, NULL, 10);
-        if (member_size < 0) {
+        header_member_size = strtol(size_field, NULL, 10);
+        if (header_member_size < 0) {
             set_err(err_buf, err_buf_size, "invalid ar member size");
             free(members);
             return -1;
         }
 
         offset += AR_HEADER_SIZE;
-        if (offset + (size_t)member_size > len) {
+        if (offset + (size_t)header_member_size > len) {
             set_err(err_buf, err_buf_size, "truncated ar member");
             free(members);
             return -1;
         }
+        member_start = buf + offset;
 
-        /* Skip GNU/BSD symbol tables and long-name tables. */
-        if (strcmp(name_field, "") != 0 && strcmp(name_field, "/") != 0 &&
-            strcmp(name_field, "//") != 0 && name_field[0] != '\0') {
-            if (count == cap) {
-                size_t ncap = cap ? cap * 2 : 8;
-                ArMember *nm = (ArMember *)realloc(members, ncap * sizeof(ArMember));
-                if (nm == NULL) {
-                    free(members);
-                    set_err(err_buf, err_buf_size, "out of memory");
-                    return -1;
-                }
-                members = nm;
-                cap = ncap;
+        /* GNU string table. */
+        if (strcmp(name_field, "//") == 0) {
+            gnu_strtab = (const char *)member_start;
+            gnu_strtab_len = (size_t)header_member_size;
+            offset += (size_t)header_member_size;
+            if (offset & 1) {
+                offset++;
             }
-            slot = &members[count++];
-            memset(slot, 0, sizeof(*slot));
-            strncpy(slot->name, name_field, sizeof(slot->name) - 1);
-            slot->data = buf + offset;
-            slot->size = (size_t)member_size;
+            continue;
         }
 
-        offset += (size_t)member_size;
+        /* Skip symbol table / empty. */
+        if (strcmp(name_field, "/") == 0 || name_field[0] == '\0') {
+            offset += (size_t)header_member_size;
+            if (offset & 1) {
+                offset++;
+            }
+            continue;
+        }
+
+        if (strncmp(name_field, "#1/", 3) == 0) {
+            /* BSD extended name: real name is first name_len bytes of body. */
+            long name_len = strtol(name_field + 3, NULL, 10);
+            if (name_len <= 0 || (size_t)name_len > (size_t)header_member_size ||
+                (size_t)name_len > AR_NAME_MAX) {
+                set_err(err_buf, err_buf_size, "invalid BSD ar extended name");
+                free(members);
+                return -1;
+            }
+            memcpy(resolved_name, member_start, (size_t)name_len);
+            resolved_name[name_len] = '\0';
+            /* Stop at first embedded NUL if present. */
+            resolved_name[strnlen(resolved_name, (size_t)name_len)] = '\0';
+            trim_trailing_spaces(resolved_name);
+            trim_trailing_slash(resolved_name);
+            name_prefix = (size_t)name_len;
+        } else if (name_field[0] == '/' && is_digits(name_field + 1)) {
+            unsigned long stroff = strtoul(name_field + 1, NULL, 10);
+            if (lookup_gnu_string_table(gnu_strtab, gnu_strtab_len, stroff,
+                                        resolved_name, sizeof(resolved_name)) !=
+                0) {
+                snprintf(resolved_name, sizeof(resolved_name), "gnu_long_%lu",
+                         stroff);
+            }
+            trim_trailing_slash(resolved_name);
+        } else {
+            strncpy(resolved_name, name_field, sizeof(resolved_name) - 1);
+            trim_trailing_slash(resolved_name);
+        }
+
+        payload_size = (size_t)header_member_size - name_prefix;
+        if (resolved_name[0] != '\0') {
+            if (push_member(&members, &count, &cap, resolved_name,
+                            member_start + name_prefix, payload_size, err_buf,
+                            err_buf_size) != 0) {
+                free(members);
+                return -1;
+            }
+        }
+
+        offset += (size_t)header_member_size;
         if (offset & 1) {
-            offset++; /* ar members are 2-byte aligned */
+            offset++;
         }
     }
 
@@ -419,6 +531,35 @@ find_data_tar(const ArMember *members, size_t count, const char **kind)
         }
     }
     return NULL;
+}
+
+static void
+format_missing_data_tar_error(char *err_buf, size_t err_buf_size,
+                              const ArMember *members, size_t count)
+{
+    size_t used = 0;
+    int n;
+
+    if (err_buf == NULL || err_buf_size == 0) {
+        return;
+    }
+    n = snprintf(err_buf, err_buf_size,
+                 "data.tar.* not found in .deb; members:");
+    if (n < 0) {
+        return;
+    }
+    used = (size_t)n;
+    for (size_t i = 0; i < count && used + 1 < err_buf_size; i++) {
+        n = snprintf(err_buf + used, err_buf_size - used, " [%zu]=%s", i,
+                     members[i].name);
+        if (n < 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+    if (count == 0 && used + 1 < err_buf_size) {
+        snprintf(err_buf + used, err_buf_size - used, " (none)");
+    }
 }
 
 int
@@ -470,7 +611,8 @@ extract_deb_to_workspace(const char *deb_path,
 
     data_member = find_data_tar(members, member_count, &kind);
     if (data_member == NULL) {
-        set_err(err_buf, err_buf_size, "data.tar.* not found in .deb");
+        format_missing_data_tar_error(err_buf, err_buf_size, members,
+                                      member_count);
         goto done;
     }
 
