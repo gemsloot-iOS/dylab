@@ -42,16 +42,17 @@ fi
 
 IPHONEOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 export CC="$(xcrun --sdk iphoneos -f clang)"
-# Capstone Makefile on Darwin adds -arch from LIBARCHS when MACOS_UNIVERSAL=yes
-# (see make.sh build_iOS / ios_arm64). Also pass target + sysroot explicitly.
-export CFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0 -Os"
-export LDFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0"
+# Capstone Makefile uses `CFLAGS += -Iinclude` WITHOUT `override`. Passing
+# CFLAGS= on the make command line prevents that append — so keep -Iinclude
+# in our flags. Prefer env export (not make argv) so Makefile can still +=.
 export LIBARCHS="arm64"
 export MACOS_UNIVERSAL="yes"
 export CAPSTONE_ARCHS="aarch64"
 export CAPSTONE_SHARED="no"
 export CAPSTONE_STATIC="yes"
 export CAPSTONE_BUILD_CORE_ONLY="yes"
+export CFLAGS="${CFLAGS:-} -arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0 -Os -I${CAPSTONE_SRC}/include -Iinclude"
+export LDFLAGS="${LDFLAGS:-} -arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=16.0 -target arm64-apple-ios16.0"
 
 echo "==> iPhoneOS SDK: ${IPHONEOS_SDK}"
 echo "==> CC: ${CC}"
@@ -59,12 +60,19 @@ echo "==> CFLAGS: ${CFLAGS}"
 
 cd "${CAPSTONE_SRC}"
 
+if [[ ! -f include/capstone/capstone.h || ! -f include/capstone/platform.h ]]; then
+  echo "ERROR: Capstone headers missing under include/capstone/" >&2
+  ls -la include include/capstone 2>&1 || true
+  exit 1
+fi
+
 echo "==> Cleaning Capstone"
 make clean || true
 rm -f libcapstone.a libcapstone.*.dylib libcapstone.dylib 2>/dev/null || true
 
 echo "==> Building Capstone static (aarch64 / ios arm64) via Makefile"
-# Official Capstone path: ./make.sh ios_arm64 — replicate with our arch/shared flags.
+# Env carries CC/CFLAGS/LDFLAGS (Makefile may still CFLAGS +=). Do not pass
+# CFLAGS= on the make argv — that blocks Capstone's `CFLAGS += -Iinclude`.
 NCPU="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 make -j"${NCPU}" \
   CAPSTONE_ARCHS=aarch64 \
@@ -72,10 +80,7 @@ make -j"${NCPU}" \
   CAPSTONE_STATIC=yes \
   CAPSTONE_BUILD_CORE_ONLY=yes \
   MACOS_UNIVERSAL=yes \
-  LIBARCHS=arm64 \
-  CC="${CC}" \
-  CFLAGS="${CFLAGS}" \
-  LDFLAGS="${LDFLAGS}"
+  LIBARCHS=arm64
 
 FOUND_LIB=""
 if [[ -f "${CAPSTONE_SRC}/libcapstone.a" ]]; then
