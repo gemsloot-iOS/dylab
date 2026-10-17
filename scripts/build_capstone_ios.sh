@@ -13,6 +13,7 @@ mkdir -p "${DEPS_DIR}/lib" "${DEPS_DIR}/include"
 if [[ -f "${DEPS_DIR}/lib/libcapstone.a" && -d "${DEPS_DIR}/include/capstone" ]]; then
   echo "==> Capstone iOS artifacts already present at ${DEPS_DIR} (cache hit)"
   ls -la "${DEPS_DIR}/lib" "${DEPS_DIR}/include/capstone" | head -40
+  lipo -info "${DEPS_DIR}/lib/libcapstone.a" 2>/dev/null || true
   exit 0
 fi
 
@@ -24,17 +25,34 @@ else
   echo "==> Reusing Capstone checkout at ${CAPSTONE_SRC}"
 fi
 
+IPHONEOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+CLANG="$(xcrun -f clang)"
+CLANGXX="$(xcrun -f clang++)"
+IOS_MIN="16.0"
+IOS_CFLAGS="-arch arm64 -isysroot ${IPHONEOS_SDK} -miphoneos-version-min=${IOS_MIN}"
+IOS_CXXFLAGS="${IOS_CFLAGS}"
+
+echo "==> iPhoneOS SDK: ${IPHONEOS_SDK}"
+echo "==> clang: ${CLANG}"
+
 echo "==> Configuring Capstone for iOS arm64"
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
-# Capstone v5 CPackConfig.txt does `if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")`
-# which fails when CMAKE_SYSTEM_PROCESSOR is empty under iOS cross-compile.
+# Capstone v5 CPackConfig.txt needs CMAKE_SYSTEM_PROCESSOR set under iOS.
 # Capstone v5 uses CAPSTONE_ARM64_SUPPORT (not AARCH64).
+# Explicit SDK/sysroot/-arch so host clang does not compile against iPhoneOS headers
+# without an arm64 target (causes "Unsupported architecture").
 cmake -S "${CAPSTONE_SRC}" -B "${BUILD_DIR}" \
+  -G "Unix Makefiles" \
   -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_SYSTEM_PROCESSOR=arm64 \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET="${IOS_MIN}" \
+  -DCMAKE_OSX_SYSROOT="${IPHONEOS_SDK}" \
+  -DCMAKE_C_COMPILER="${CLANG}" \
+  -DCMAKE_CXX_COMPILER="${CLANGXX}" \
+  -DCMAKE_C_FLAGS="${IOS_CFLAGS}" \
+  -DCMAKE_CXX_FLAGS="${IOS_CXXFLAGS}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCPACK_GENERATOR= \
   -DBUILD_SHARED_LIBS=OFF \
@@ -84,6 +102,14 @@ if [[ -z "${FOUND_LIB}" ]]; then
   exit 1
 fi
 
+echo "==> Verifying architecture of ${FOUND_LIB}"
+LIPO_INFO="$(lipo -info "${FOUND_LIB}" 2>&1 || true)"
+echo "${LIPO_INFO}"
+if ! echo "${LIPO_INFO}" | grep -q 'arm64'; then
+  echo "ERROR: expected arm64 in libcapstone.a, got: ${LIPO_INFO}" >&2
+  exit 1
+fi
+
 echo "==> Staging ${FOUND_LIB} -> ${DEPS_DIR}/lib/libcapstone.a"
 cp "${FOUND_LIB}" "${DEPS_DIR}/lib/libcapstone.a"
 
@@ -100,3 +126,4 @@ fi
 
 echo "==> Capstone iOS artifacts ready in ${DEPS_DIR}"
 ls -la "${DEPS_DIR}/lib" "${DEPS_DIR}/include/capstone" | head -40
+lipo -info "${DEPS_DIR}/lib/libcapstone.a"
