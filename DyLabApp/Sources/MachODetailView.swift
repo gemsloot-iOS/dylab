@@ -14,6 +14,13 @@ struct MachODetailView: View {
     @State private var isBusy = false
     @State private var classEntries: [ObjCClassEntry] = []
     @State private var callableEntries: [CallableEntry] = []
+    @State private var buildStyleRootless = true
+    @State private var buildLog = ""
+    @State private var builtDylibURL: URL?
+    @State private var builtDebURL: URL?
+    @State private var shareItems: [Any] = []
+    @State private var showShare = false
+    @State private var reinspectURL: URL?
 
     private let tabLabels = ["Summary", "Classes", "Source"]
 
@@ -50,6 +57,17 @@ struct MachODetailView: View {
         .navigationTitle(dylibURL.lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { machOToolbar }
+        .sheet(isPresented: $showShare) {
+            ActivityView(items: shareItems)
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { reinspectURL != nil },
+            set: { if !$0 { reinspectURL = nil } }
+        )) {
+            if let reinspectURL {
+                MachODetailView(dylibURL: reinspectURL, workspaceURL: workspaceURL)
+            }
+        }
         .onAppear(perform: loadAll)
     }
 
@@ -198,8 +216,68 @@ struct MachODetailView: View {
         Section {
             TextEditor(text: $tweakSource)
                 .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 320)
+                .frame(minHeight: 280)
                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        }
+
+        Section {
+            Picker("Install Style", selection: $buildStyleRootless) {
+                Text("Rootless").tag(true)
+                Text("Rootful").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+            Button {
+                compileAndPackage()
+            } label: {
+                Label("Compile & Package .deb", systemImage: "hammer.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isBusy || tweakPath == nil)
+
+            if let builtDebURL {
+                Button {
+                    shareItems = [builtDebURL]
+                    showShare = true
+                } label: {
+                    Label("Export .deb", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            }
+            if let builtDylibURL {
+                Button {
+                    shareItems = [builtDylibURL]
+                    showShare = true
+                } label: {
+                    Label("Export .dylib", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    reinspectURL = builtDylibURL
+                } label: {
+                    Label("Re-Inspect Output .dylib", systemImage: "doc.text")
+                }
+                .buttonStyle(.bordered)
+            }
+        } header: {
+            Label("Build & Export", systemImage: "hammer.fill")
+        } footer: {
+            Text(buildStyleRootless
+                 ? "Rootless: /var/jb/… · architecture iphoneos-arm64"
+                 : "Rootful: /Library/… · architecture iphoneos-arm")
+        }
+
+        if !buildLog.isEmpty {
+            Section {
+                Text(buildLog)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } header: {
+                Label("Build Log", systemImage: "terminal.fill")
+            }
         }
     }
 
@@ -294,6 +372,82 @@ struct MachODetailView: View {
             statusMessage = "Saved \(tweakPath.lastPathComponent)"
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func sdkIncludePath() -> String? {
+        Bundle.main.resourceURL?
+            .appendingPathComponent("SDK", isDirectory: true)
+            .appendingPathComponent("include", isDirectory: true)
+            .path
+    }
+
+    private func compileAndPackage() {
+        saveSource()
+        guard let tweakPath else {
+            statusMessage = "No Tweak.m — Generate Source first"
+            return
+        }
+        guard let sdk = sdkIncludePath() else {
+            statusMessage = "Bundled SDK/include missing"
+            return
+        }
+        isBusy = true
+        buildLog = ""
+        statusMessage = "Building…"
+        let outDir = workspaceURL.appendingPathComponent("build", isDirectory: true)
+        let style: DylabDebStyle = buildStyleRootless ? DYLAB_DEB_ROOTLESS : DYLAB_DEB_ROOTFUL
+        let pkgBase = workspaceURL.lastPathComponent
+        let dylibName = "\(pkgBase).dylib"
+        let packageId = "com.dylab.\(pkgBase.lowercased().replacingOccurrences(of: " ", with: ""))"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+            var dylibBuf = [CChar](repeating: 0, count: 1024)
+            var debBuf = [CChar](repeating: 0, count: 1024)
+            var err = [CChar](repeating: 0, count: 2048)
+            let logBox = BuildLogBox { line in
+                DispatchQueue.main.async {
+                    buildLog.append(line)
+                    if !line.hasSuffix("\n") { buildLog.append("\n") }
+                }
+            }
+            let rc = dylab_build_tweak(
+                tweakPath.path,
+                sdk,
+                outDir.path,
+                dylibName,
+                packageId,
+                pkgBase,
+                "1.0.0",
+                "com.apple.UIKit",
+                style,
+                { ctx, line in
+                    guard let ctx, let line else { return }
+                    let box = Unmanaged<BuildLogBox>.fromOpaque(ctx).takeUnretainedValue()
+                    box.append(String(cString: line))
+                },
+                Unmanaged.passUnretained(logBox).toOpaque(),
+                &dylibBuf,
+                dylibBuf.count,
+                &debBuf,
+                debBuf.count,
+                &err,
+                err.count
+            )
+            let dylibStr = String(cString: dylibBuf)
+            let debStr = String(cString: debBuf)
+            let errStr = String(cString: err)
+            DispatchQueue.main.async {
+                isBusy = false
+                if rc == 0 {
+                    builtDylibURL = URL(fileURLWithPath: dylibStr)
+                    builtDebURL = URL(fileURLWithPath: debStr)
+                    statusMessage = "Build OK — \(URL(fileURLWithPath: debStr).lastPathComponent)"
+                } else {
+                    statusMessage = "Build failed: \(errStr.isEmpty ? "rc=\(rc)" : errStr)"
+                }
+            }
         }
     }
 
