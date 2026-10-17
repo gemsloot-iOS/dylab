@@ -16,11 +16,20 @@ Package.resolved
 # WAMR source checkout (cloned by scripts/build_wamr_ios.sh)
 Deps/wasm-micro-runtime/
 
+# Capstone source checkout (cloned by scripts/build_capstone_ios.sh)
+Deps/capstone/
+
 # Built WAMR iOS artifacts (produced on CI / locally by the script)
 Deps/wamr-ios/lib/*
 !Deps/wamr-ios/lib/.gitkeep
 Deps/wamr-ios/include/*
 !Deps/wamr-ios/include/.gitkeep
+
+# Built Capstone iOS artifacts (produced on CI / locally by the script)
+Deps/capstone-ios/lib/*
+!Deps/capstone-ios/lib/.gitkeep
+Deps/capstone-ios/include/*
+!Deps/capstone-ios/include/.gitkeep
 
 # Editor / IDE
 .idea/
