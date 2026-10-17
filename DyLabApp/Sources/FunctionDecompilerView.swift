@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-/// Per-function decompiler: Pseudo-C / ARM64 / Ghidra (3B placeholder).
+/// Per-function decompiler: Pseudo-C / ARM64 / Structured.
 struct FunctionDecompilerView: View {
     let dylibPath: String
     let title: String
@@ -12,45 +13,79 @@ struct FunctionDecompilerView: View {
     @State private var output = "Decompiling…"
     @State private var isBusy = false
 
-    private let modeLabels = ["Pseudo-C", "ARM64", "Ghidra (3B)"]
+    private let modeLabels = ["Pseudo-C", "ARM64", "Structured"]
     private let modes: [DecompileMode] = [
         DECOMPILE_MODE_HEURISTIC_C,
         DECOMPILE_MODE_DISASM,
-        DECOMPILE_MODE_GHIDRA_C
+        DECOMPILE_MODE_STRUCTURED
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Mode", selection: $modeIndex) {
-                ForEach(0..<modeLabels.count, id: \.self) { i in
-                    Text(modeLabels[i]).tag(i)
+        List {
+            Section {
+                Picker("Mode", selection: $modeIndex) {
+                    ForEach(0..<modeLabels.count, id: \.self) { i in
+                        Text(modeLabels[i]).tag(i)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                .onChange(of: modeIndex) { _ in
+                    runDecompile()
+                }
+
+                LabeledContent("Offset") {
+                    Text("\(fileOffset)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                LabeledContent("VMA") {
+                    Text(String(format: "0x%llx", vma))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                LabeledContent("Size") {
+                    Text("\(size)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
                 }
             }
-            .pickerStyle(.segmented)
-            .padding()
-            .onChange(of: modeIndex) { _ in
-                runDecompile()
-            }
 
-            Text("off \(fileOffset)  vma \(String(format: "0x%llx", vma))  size \(size)")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-
-            ScrollView {
+            Section {
+                if isBusy {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Decompiling…")
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Text(output)
                     .font(.system(.caption, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } header: {
+                Label("Output", systemImage: "terminal.fill")
             }
-            .background(Color(white: 0.07))
-            .foregroundStyle(Color(white: 0.93))
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { decompilerToolbar }
         .onAppear(perform: runDecompile)
+    }
+
+    @ToolbarContentBuilder
+    private var decompilerToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                UIPasteboard.general.string = output
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(isBusy || output.isEmpty)
+        }
     }
 
     private func runDecompile() {

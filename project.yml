@@ -84,6 +84,8 @@ targets:
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         SWIFT_OBJC_BRIDGING_HEADER: DyLabApp/Bridge/DyLab-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        CLANG_CXX_LIBRARY: libc++
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Deps/wamr-ios/include
           - $(SRCROOT)/Deps/zstd

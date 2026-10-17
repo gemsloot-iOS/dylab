@@ -1,37 +1,64 @@
 import Darwin
 import SwiftUI
+import UIKit
 
 struct WasiSandboxView: View {
     @State private var consoleText = "DyLab WASI console ready.\nTap Run Hello.wasm Test to execute the bundled tool.\n"
     @State private var isRunning = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("WASI Sandbox")
-                .font(.title2.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        runHelloWasmTest()
+                    } label: {
+                        Label(
+                            isRunning ? "Running…" : "Run Hello.wasm Test",
+                            systemImage: "terminal.fill"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRunning)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+                } footer: {
+                    Text("Runs the bundled hello.wasm inside the Documents sandbox.")
+                }
 
-            ScrollView {
-                Text(consoleText)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(8)
+                Section {
+                    if isRunning {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Executing…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(consoleText)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } header: {
+                    Label("Console", systemImage: "terminal.fill")
+                }
             }
-            .background(Color(white: 0.08))
-            .foregroundStyle(Color(white: 0.92))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            Button {
-                runHelloWasmTest()
-            } label: {
-                Text(isRunning ? "Running…" : "Run Hello.wasm Test")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isRunning)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("WASI Sandbox")
+            .toolbar { wasiToolbar }
         }
-        .padding()
+    }
+
+    @ToolbarContentBuilder
+    private var wasiToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                UIPasteboard.general.string = consoleText
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(consoleText.isEmpty)
+        }
     }
 
     private func appendConsole(_ line: String) {

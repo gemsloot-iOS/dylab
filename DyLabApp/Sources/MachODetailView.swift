@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mach-O inspector: Summary JSON | Classes & Functions | Source Editor (Tweak.m).
+/// Mach-O inspector: Summary | Classes & Functions | Source Editor.
 struct MachODetailView: View {
     let dylibURL: URL
     let workspaceURL: URL
@@ -15,156 +15,191 @@ struct MachODetailView: View {
     @State private var classEntries: [ObjCClassEntry] = []
     @State private var callableEntries: [CallableEntry] = []
 
+    private let tabLabels = ["Summary", "Classes", "Source"]
+
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Tab", selection: $selectedTab) {
-                Text("Summary JSON").tag(0)
-                Text("Classes & Functions").tag(1)
-                Text("Source Editor").tag(2)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.top, 8)
-
-            if !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.top, 6)
-            }
-
-            TabView(selection: $selectedTab) {
-                summaryTab.tag(0)
-                classesTab.tag(1)
-                sourceTab.tag(2)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-        }
-        .navigationTitle(dylibURL.lastPathComponent)
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: loadAll)
-    }
-
-    private var summaryTab: some View {
-        ScrollView {
-            Text(summaryJSON)
-                .font(.system(.caption, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(12)
-        }
-        .background(Color(white: 0.08))
-        .foregroundStyle(Color(white: 0.92))
-    }
-
-    private var classesTab: some View {
         List {
-            Section("ObjC Classes") {
-                if classEntries.isEmpty {
-                    Text("No ObjC classes found")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(classEntries) { cls in
-                    DisclosureGroup(cls.name) {
-                        ForEach(cls.methods) { method in
-                            NavigationLink {
-                                FunctionDecompilerView(
-                                    dylibPath: dylibURL.path,
-                                    title: "\(cls.name).\(method.name)",
-                                    fileOffset: method.fileOffset,
-                                    vma: method.vma,
-                                    size: method.size
-                                )
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(method.name)
-                                        .font(.body.monospaced())
-                                    Text("imp \(method.vmaHex)  off \(method.fileOffset)  size \(method.size)")
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        if !cls.properties.isEmpty {
-                            Text("props: " + cls.properties.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        if !cls.ivars.isEmpty {
-                            Text("ivars: " + cls.ivars.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+            Section {
+                Picker("Tab", selection: $selectedTab) {
+                    ForEach(0..<tabLabels.count, id: \.self) { i in
+                        Text(tabLabels[i]).tag(i)
                     }
+                }
+                .pickerStyle(.segmented)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+                if !statusMessage.isEmpty {
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Callables (__TEXT,__text)") {
-                if callableEntries.isEmpty {
-                    Text("No callables")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(callableEntries) { fn in
-                    NavigationLink {
-                        FunctionDecompilerView(
-                            dylibPath: dylibURL.path,
-                            title: fn.name,
-                            fileOffset: fn.fileOffset,
-                            vma: fn.vma,
-                            size: fn.size
-                        )
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(fn.name)
-                                .font(.body.monospaced())
-                            Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)  size \(fn.size)")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
+            switch selectedTab {
+            case 0:
+                summarySections
+            case 1:
+                classesSections
+            default:
+                sourceSections
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(dylibURL.lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { machOToolbar }
+        .onAppear(perform: loadAll)
     }
 
-    private var sourceTab: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Button("Generate Source (Tweak.m)") {
+    @ToolbarContentBuilder
+    private var machOToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
+            if selectedTab == 2 {
+                Button {
                     generateSource()
+                } label: {
+                    Label("Generate", systemImage: "doc.text.fill")
+                }
+                .disabled(isBusy)
+
+                Button {
+                    saveSource()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                }
+                .disabled(isBusy || tweakPath == nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var summarySections: some View {
+        Section {
+            Text(summaryJSON)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } header: {
+            Label("Mach-O Summary", systemImage: "doc.text.fill")
+        }
+    }
+
+    @ViewBuilder
+    private var classesSections: some View {
+        Section {
+            if classEntries.isEmpty {
+                Text("No ObjC classes found")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(classEntries) { cls in
+                DisclosureGroup {
+                    ForEach(cls.methods) { method in
+                        NavigationLink {
+                            FunctionDecompilerView(
+                                dylibPath: dylibURL.path,
+                                title: "\(cls.name).\(method.name)",
+                                fileOffset: method.fileOffset,
+                                vma: method.vma,
+                                size: method.size
+                            )
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(method.name)
+                                    .font(.body.monospaced())
+                                Text("imp \(method.vmaHex)  off \(method.fileOffset)  size \(method.size)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if !cls.properties.isEmpty {
+                        Text("props: " + cls.properties.joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !cls.ivars.isEmpty {
+                        Text("ivars: " + cls.ivars.joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } label: {
+                    Text(cls.name)
+                        .font(.body.monospaced())
+                }
+            }
+        } header: {
+            Label("ObjC Classes", systemImage: "doc.text.fill")
+        }
+
+        Section {
+            if callableEntries.isEmpty {
+                Text("No callables")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(callableEntries) { fn in
+                NavigationLink {
+                    FunctionDecompilerView(
+                        dylibPath: dylibURL.path,
+                        title: fn.name,
+                        fileOffset: fn.fileOffset,
+                        vma: fn.vma,
+                        size: fn.size
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(fn.name)
+                            .font(.body.monospaced())
+                        Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)  size \(fn.size)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Callables (__TEXT,__text)")
+        }
+    }
+
+    @ViewBuilder
+    private var sourceSections: some View {
+        Section {
+            HStack(spacing: 12) {
+                Button {
+                    generateSource()
+                } label: {
+                    Label("Generate Source", systemImage: "doc.text.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isBusy)
 
-                Button("Save") {
+                Button {
                     saveSource()
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(.bordered)
                 .disabled(isBusy || tweakPath == nil)
-
-                Spacer()
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
+            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
 
             if let tweakPath {
-                Text(tweakPath.path)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
+                LabeledContent("Path") {
+                    Text(tweakPath.lastPathComponent)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
+        } header: {
+            Label("Tweak.m", systemImage: "doc.text.fill")
+        }
 
+        Section {
             TextEditor(text: $tweakSource)
                 .font(.system(.body, design: .monospaced))
-                .padding(4)
-                .background(Color(white: 0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+                .frame(minHeight: 320)
+                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
         }
     }
 

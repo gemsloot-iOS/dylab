@@ -1,4 +1,5 @@
 #include "ObjCDumper.h"
+#include "DecompilerEngine.h"
 #include "MachOMap.h"
 
 #include <ctype.h>
@@ -624,6 +625,73 @@ sanitize_ident(const char *in, char *out, size_t out_sz)
     }
 }
 
+static void
+emit_indented_body(FILE *f, const char *body)
+{
+    /* Skip leading signature lines from structured output; emit statements. */
+    const char *p = body;
+    while (p && *p) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        char line[1024];
+        if (len >= sizeof(line)) {
+            len = sizeof(line) - 1;
+        }
+        memcpy(line, p, len);
+        line[len] = '\0';
+        /* Skip file-level comments / outer braces from decompiler wrapper */
+        if (strncmp(line, "//", 2) == 0 || strncmp(line, "id ", 3) == 0 ||
+            strcmp(line, "{") == 0 || strcmp(line, "}") == 0 ||
+            (line[0] == '\0')) {
+            /* keep structured comments that are useful */
+            if (strncmp(line, "// Phase", 8) == 0 ||
+                strncmp(line, "// CFG", 6) == 0) {
+                fprintf(f, "    %s\n", line);
+            }
+        } else {
+            fprintf(f, "    %s\n", line);
+        }
+        if (!nl) {
+            break;
+        }
+        p = nl + 1;
+    }
+}
+
+static void
+emit_method_body_from_decompile(FILE *f, const char *dylib_path, uint64_t imp,
+                                uint64_t file_off)
+{
+    char *buf;
+    uint64_t size;
+    int rc;
+
+    if (!dylib_path || imp == 0) {
+        fprintf(f, "    return nil; /* no imp */\n");
+        return;
+    }
+    buf = (char *)malloc(256 * 1024);
+    if (!buf) {
+        fprintf(f, "    return nil; /* OOM */\n");
+        return;
+    }
+    size = 0; /* engine derives from function starts */
+    rc = decompile_function(dylib_path, file_off, size, imp,
+                            DECOMPILE_MODE_STRUCTURED, buf, 256 * 1024);
+    if (rc != 0 && (!buf[0])) {
+        fprintf(f, "    return nil; /* decompile failed */\n");
+        free(buf);
+        return;
+    }
+    fprintf(f, "    /* Phase 3B structured body */\n");
+    emit_indented_body(f, buf);
+    /* Ensure a return if decompiler didn't emit one at top-level */
+    if (strstr(buf, "return") == NULL) {
+        fprintf(f, "    return nil;\n");
+    }
+    free(buf);
+}
+
 /* Emit method signature pieces for skeleton (sel "foo:bar:" → - (id)foo:(id)a0 bar:(id)a1). */
 static void
 emit_method_decl(FILE *f, const char *sel)
@@ -670,7 +738,8 @@ emit_method_decl(FILE *f, const char *sel)
 }
 
 static void
-emit_method_impl(FILE *f, const char *sel)
+emit_method_impl(FILE *f, const char *sel, const char *dylib_path, uint64_t imp,
+                 uint64_t file_off)
 {
     char buf[512];
     char *parts[32];
@@ -680,7 +749,9 @@ emit_method_impl(FILE *f, const char *sel)
     int arg = 0;
 
     if (!sel || !sel[0]) {
-        fprintf(f, "- (id)dylab_unknown { return nil; }\n");
+        fprintf(f, "- (id)dylab_unknown {\n");
+        emit_method_body_from_decompile(f, dylib_path, imp, file_off);
+        fprintf(f, "}\n");
         return;
     }
     snprintf(buf, sizeof(buf), "%s", sel);
@@ -692,7 +763,9 @@ emit_method_impl(FILE *f, const char *sel)
     if (nparts == 1 && strchr(sel, ':') == NULL) {
         char idbuf[256];
         sanitize_ident(parts[0], idbuf, sizeof(idbuf));
-        fprintf(f, "- (id)%s { return nil; /* TODO: reconstruct */ }\n", idbuf);
+        fprintf(f, "- (id)%s {\n", idbuf);
+        emit_method_body_from_decompile(f, dylib_path, imp, file_off);
+        fprintf(f, "}\n");
         return;
     }
     fprintf(f, "- (id)");
@@ -705,7 +778,9 @@ emit_method_impl(FILE *f, const char *sel)
             fprintf(f, " %s:(id)a%d", idbuf, arg++);
         }
     }
-    fprintf(f, " { return nil; /* TODO: reconstruct */ }\n");
+    fprintf(f, " {\n");
+    emit_method_body_from_decompile(f, dylib_path, imp, file_off);
+    fprintf(f, "}\n");
 }
 
 static void
@@ -716,10 +791,14 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
     enum { MAX_SKEL_CLASSES = 24, MAX_SKEL_METHODS = 16 };
     char class_names[MAX_SKEL_CLASSES][96];
     char method_sels[MAX_SKEL_CLASSES][MAX_SKEL_METHODS][128];
+    uint64_t method_imps[MAX_SKEL_CLASSES][MAX_SKEL_METHODS];
+    uint64_t method_offs[MAX_SKEL_CLASSES][MAX_SKEL_METHODS];
     int method_counts[MAX_SKEL_CLASSES];
 
     memset(class_names, 0, sizeof(class_names));
     memset(method_sels, 0, sizeof(method_sels));
+    memset(method_imps, 0, sizeof(method_imps));
+    memset(method_offs, 0, sizeof(method_offs));
     memset(method_counts, 0, sizeof(method_counts));
 
     classlist = macho_find_sect(map, "__DATA_CONST", "__objc_classlist");
@@ -799,12 +878,19 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
                     for (uint32_t mi = 0; mi < mcount; mi++) {
                         const uint8_t *mp = mbase + 8 + (size_t)mi * entsize;
                         const char *name = "";
+                        uint64_t imp = 0;
+                        uint64_t foff = 0;
                         if (relative) {
                             int32_t name_rel = ri32(mp);
+                            int32_t imp_rel = ri32(mp + 8);
                             uint64_t name_addr =
                                 macho_strip_ptr(methods_vma + 8 +
                                                 (uint64_t)mi * entsize) +
                                 (int64_t)name_rel;
+                            uint64_t imp_addr =
+                                macho_strip_ptr(methods_vma + 8 +
+                                                (uint64_t)mi * entsize + 8) +
+                                (int64_t)imp_rel;
                             const uint8_t *np =
                                 macho_vma_to_ptr(map, name_addr, 8);
                             if (np) {
@@ -815,12 +901,18 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
                             } else {
                                 name = safe_name(map, name_addr);
                             }
+                            imp = imp_addr;
                         } else {
                             name = safe_name(map, ru64(mp));
+                            imp = macho_strip_ptr(ru64(mp + 16));
                         }
+                        macho_vma_to_fileoff(map, imp, &foff);
                         if (name && name[0]) {
-                            snprintf(method_sels[ci][method_counts[ci]],
+                            int mi2 = method_counts[ci];
+                            snprintf(method_sels[ci][mi2],
                                      sizeof(method_sels[ci][0]), "%s", name);
+                            method_imps[ci][mi2] = imp;
+                            method_offs[ci][mi2] = foff;
                             method_counts[ci]++;
                         }
                     }
@@ -831,15 +923,14 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
     }
 
     fprintf(hf,
-            "/* Auto-generated by DyLab ObjCDumper — Phase 3A */\n"
+            "/* Auto-generated by DyLab ObjCDumper — Phase 3B */\n"
             "#import <Foundation/Foundation.h>\n\n");
     fprintf(tf,
-            "/* Auto-generated by DyLab ObjCDumper — Phase 3A */\n"
+            "/* Auto-generated by DyLab ObjCDumper — Phase 3B */\n"
             "#import \"TweakClasses.h\"\n"
             "#import <Foundation/Foundation.h>\n\n"
             "/*\n"
-            " * Skeleton tweak. Replace hooks with Capstone/Ghidra-assisted\n"
-            " * reconstructions from FunctionDecompilerView.\n"
+            " * Tweak with Phase 3B structured decompiler method bodies.\n"
             " * Source binary: %s\n"
             " */\n\n"
             "__attribute__((constructor))\n"
@@ -875,7 +966,8 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
 
         fprintf(tf, "@implementation %s\n", class_names[i]);
         for (int m = 0; m < method_counts[i]; m++) {
-            emit_method_impl(tf, method_sels[i][m]);
+            emit_method_impl(tf, method_sels[i][m], path, method_imps[i][m],
+                             method_offs[i][m]);
         }
         if (method_counts[i] == 0) {
             fprintf(tf,
