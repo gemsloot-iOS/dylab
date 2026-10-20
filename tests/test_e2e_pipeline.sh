@@ -46,6 +46,16 @@ run_one() {
     echo "FAIL [$name]: missing Foundation include" >&2
     return 1
   fi
+  # Quoted companion headers (TweakClasses.h) must be inlined — TinyCC cannot
+  # parse raw @interface from a leftover #include "…".
+  if grep -E '#include[[:space:]]+"[^"]+"' "$work/Tweak.lowered.c"; then
+    echo "FAIL [$name]: leftover quoted #include in lowered output (should be inlined)" >&2
+    return 1
+  fi
+  if grep -E '@interface|@implementation' "$work/Tweak.lowered.c"; then
+    echo "FAIL [$name]: raw ObjC still present in lowered output" >&2
+    return 1
+  fi
   echo "  lowered OK"
 
   if [[ "$HAVE_TCC" -eq 1 ]]; then
@@ -80,4 +90,6 @@ PY
 
 run_one sample_class "$ROOT/tests/fixtures/sample_class_tweak.m"
 run_one constructor_popup "$ROOT/tests/fixtures/constructor_popup_tweak.m"
+# Matches UI "Generate Source" output: Tweak.m + TweakClasses.h side by side
+run_one generated_skeleton "$ROOT/tests/fixtures/generated_skeleton/Tweak.m"
 echo "ALL E2E PASS"
