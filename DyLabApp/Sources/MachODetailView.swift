@@ -125,26 +125,26 @@ struct MachODetailView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(method.name)
-                                    .font(.body.monospaced())
+                                    .font(.system(size: 13, design: .monospaced))
                                 Text("imp \(method.vmaHex)  off \(method.fileOffset)  size \(method.size)")
-                                    .font(.caption2.monospaced())
+                                    .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(.secondary)
                             }
                         }
                     }
                     if !cls.properties.isEmpty {
                         Text("props: " + cls.properties.joined(separator: ", "))
-                            .font(.caption)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     if !cls.ivars.isEmpty {
                         Text("ivars: " + cls.ivars.joined(separator: ", "))
-                            .font(.caption)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 } label: {
                     Text(cls.name)
-                        .font(.body.monospaced())
+                        .font(.system(size: 13, design: .monospaced))
                 }
             }
         } header: {
@@ -168,9 +168,9 @@ struct MachODetailView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(fn.name)
-                            .font(.body.monospaced())
+                            .font(.system(size: 13, design: .monospaced))
                         Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)  size \(fn.size)")
-                            .font(.caption2.monospaced())
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -215,9 +215,9 @@ struct MachODetailView: View {
 
         Section {
             TextEditor(text: $tweakSource)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 280)
-                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 320)
+                .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
         }
 
         Section {
@@ -357,7 +357,13 @@ struct MachODetailView: View {
                     tweakPath = URL(fileURLWithPath: tweakWritten)
                     tweakSource = source
                     selectedTab = 2
-                    statusMessage = "Wrote \(tweakWritten)"
+                    if source.contains("DyLabHookTarget") {
+                        statusMessage =
+                            "No ObjC classes resolved in \(dylibURL.lastPathComponent) — wrote fallback skeleton"
+                    } else {
+                        statusMessage =
+                            "Generated Tweak.m from ObjC classes in \(dylibURL.lastPathComponent)"
+                    }
                 } else {
                     statusMessage = "Generate failed: \(errText.isEmpty ? "rc=\(rc)" : errText)"
                 }

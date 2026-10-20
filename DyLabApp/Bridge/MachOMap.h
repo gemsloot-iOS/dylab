@@ -92,6 +92,17 @@ int macho_map_load(const char *path, MachOMap *map);
 void macho_map_free(MachOMap *map);
 
 uint64_t macho_strip_ptr(uint64_t vma);
+
+/**
+ * Decode a pointer value read from __DATA* when the image may use dyld
+ * chained fixups. For chained rebases, strip to the 36-bit target; for
+ * plain images, behave like macho_strip_ptr. Bind entries return 0.
+ */
+uint64_t macho_fixup_ptr(const MachOMap *map, uint64_t raw);
+
+/** Read an 8-byte pointer at vma and run it through macho_fixup_ptr. */
+uint64_t macho_read_ptr(const MachOMap *map, uint64_t vma);
+
 const uint8_t *macho_vma_to_ptr(const MachOMap *map, uint64_t vma, size_t need);
 int macho_vma_to_fileoff(const MachOMap *map, uint64_t vma, uint64_t *out_off);
 const MachOSect *macho_find_sect(const MachOMap *map, const char *seg,
