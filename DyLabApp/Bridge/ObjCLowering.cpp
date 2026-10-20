@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -95,6 +96,97 @@ static std::string replace_all(std::string s, const std::string &a, const std::s
         pos += b.size();
     }
     return s;
+}
+
+static std::string dirname_of(const std::string &path) {
+    size_t pos = path.find_last_of('/');
+    if (pos == std::string::npos) return ".";
+    if (pos == 0) return "/";
+    return path.substr(0, pos);
+}
+
+static bool read_entire_file(const std::string &path, std::string &out) {
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return false;
+    }
+    long sz = ftell(f);
+    if (sz < 0 || sz > 8 * 1024 * 1024) {
+        fclose(f);
+        return false;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
+    out.assign((size_t)sz, '\0');
+    if (sz && fread(&out[0], 1, (size_t)sz, f) != (size_t)sz) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+    return true;
+}
+
+/**
+ * Inline #import/#include "local.h" relative to base_dir so ObjC in companion
+ * headers (e.g. generated TweakClasses.h) is lowered with the tweak, and TinyCC
+ * never has to parse raw @interface from a separate include.
+ * Angle-bracket includes are left alone. Missing quoted files are left as-is
+ * so TCC include paths can still resolve them.
+ */
+static std::string expand_quoted_includes(const std::string &src,
+                                          const std::string &base_dir,
+                                          std::set<std::string> &stack) {
+    std::ostringstream out;
+    size_t i = 0;
+    while (i < src.size()) {
+        size_t line_end = src.find('\n', i);
+        std::string line = (line_end == std::string::npos)
+                               ? src.substr(i)
+                               : src.substr(i, line_end - i + 1);
+        i = (line_end == std::string::npos) ? src.size() : line_end + 1;
+
+        size_t j = 0;
+        while (j < line.size() && (line[j] == ' ' || line[j] == '\t')) j++;
+        bool is_import = line.compare(j, 7, "#import") == 0 &&
+                         (j + 7 >= line.size() || !is_ident(line[j + 7]));
+        bool is_include = line.compare(j, 8, "#include") == 0 &&
+                          (j + 8 >= line.size() || !is_ident(line[j + 8]));
+        if (is_import || is_include) {
+            size_t k = j + (is_import ? 7 : 8);
+            while (k < line.size() && (line[k] == ' ' || line[k] == '\t')) k++;
+            if (k < line.size() && line[k] == '"') {
+                size_t start = ++k;
+                while (k < line.size() && line[k] != '"') k++;
+                if (k < line.size() && line[k] == '"') {
+                    std::string name = line.substr(start, k - start);
+                    std::string path =
+                        base_dir == "." ? name : (base_dir + "/" + name);
+                    if (stack.count(path)) {
+                        out << "/* skipped cyclic include \"" << name << "\" */\n";
+                        continue;
+                    }
+                    std::string content;
+                    if (read_entire_file(path, content)) {
+                        stack.insert(path);
+                        out << "/* begin include \"" << name << "\" */\n";
+                        out << expand_quoted_includes(content, dirname_of(path),
+                                                      stack);
+                        if (!content.empty() && content.back() != '\n')
+                            out << '\n';
+                        out << "/* end include \"" << name << "\" */\n";
+                        stack.erase(path);
+                        continue;
+                    }
+                }
+            }
+        }
+        out << line;
+    }
+    return out.str();
 }
 
 /* #import "X" / #import <X> → #include */
@@ -608,28 +700,19 @@ dylab_objc_lower_file(const char *in_path,
         set_err(err_buf, err_cap, "invalid paths");
         return -1;
     }
-    FILE *f = fopen(in_path, "rb");
-    if (!f) {
+    std::string src;
+    if (!read_entire_file(in_path, src)) {
         set_err(err_buf, err_cap, "cannot open input");
         return -1;
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz < 0 || sz > 8 * 1024 * 1024) {
-        fclose(f);
-        set_err(err_buf, err_cap, "input too large");
-        return -1;
-    }
-    std::string src((size_t)sz, '\0');
-    if (sz && fread(&src[0], 1, (size_t)sz, f) != (size_t)sz) {
-        fclose(f);
-        set_err(err_buf, err_cap, "read failed");
-        return -1;
-    }
-    fclose(f);
 
-    std::vector<char> out(std::max((size_t)sz * 8 + 65536, (size_t)256 * 1024));
+    /* Inline quoted local headers (TweakClasses.h, etc.) before ObjC→C. */
+    std::set<std::string> include_stack;
+    include_stack.insert(in_path);
+    src = expand_quoted_includes(src, dirname_of(in_path), include_stack);
+
+    std::vector<char> out(
+        std::max(src.size() * 8 + 65536, (size_t)256 * 1024));
     char err[512];
     int rc = dylab_objc_lower(src.c_str(), out.data(), out.size(), err, sizeof(err));
     if (rc != 0) {

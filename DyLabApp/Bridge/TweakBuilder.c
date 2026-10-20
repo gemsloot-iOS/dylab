@@ -32,6 +32,28 @@ set_err(char *err, size_t cap, const char *msg)
     if (err && cap) snprintf(err, cap, "%s", msg ? msg : "");
 }
 
+/* Directory containing path (mutates a copy into out). */
+static void
+parent_dir(const char *path, char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    if (!path || !path[0]) {
+        snprintf(out, cap, ".");
+        return;
+    }
+    snprintf(out, cap, "%s", path);
+    char *slash = strrchr(out, '/');
+    if (!slash) {
+        snprintf(out, cap, ".");
+        return;
+    }
+    if (slash == out) {
+        slash[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
+}
+
 #if DYLAB_HAVE_TCC
 typedef struct {
     DylabBuildLogFn fn;
@@ -120,6 +142,13 @@ dylab_build_tweak(const char *tweak_m_path,
         TccLog L = {log_fn, log_ctx, err, sizeof(err)};
         tcc_set_error_func(s, &L, tcc_err);
         tcc_set_output_type(s, TCC_OUTPUT_OBJ);
+        /* Prefer the tweak source dir so any remaining #include "…" resolve
+         * next to Tweak.m (Generate Source writes TweakClasses.h there). */
+        {
+            char src_dir[1024];
+            parent_dir(tweak_m_path, src_dir, sizeof(src_dir));
+            tcc_add_include_path(s, src_dir);
+        }
         tcc_add_include_path(s, sdk_include_dir);
         tcc_define_symbol(s, "__APPLE__", NULL);
         tcc_define_symbol(s, "__arm64__", NULL);

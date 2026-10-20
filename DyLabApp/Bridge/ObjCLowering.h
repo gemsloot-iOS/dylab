@@ -34,6 +34,10 @@ int dylab_objc_lower(const char *objc_src,
 
 /**
  * Lower a file on disk; writes UTF-8 C source to out_path.
+ *
+ * Before transforming, expands #import/#include "local.h" relative to the
+ * input file's directory (so generated TweakClasses.h is inlined and lowered
+ * instead of being left for TinyCC to parse as raw ObjC).
  */
 int dylab_objc_lower_file(const char *in_path,
                           const char *out_path,
