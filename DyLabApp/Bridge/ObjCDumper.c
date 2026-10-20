@@ -109,6 +109,9 @@ jb_escape(JB *jb, const char *s)
             jb_puts(jb, esc);
         } else if (*p < 0x20) {
             jb_printf(jb, "\\u%04x", *p);
+        } else if (*p >= 0x7f) {
+            /* Keep JSON UTF-8 clean — never emit raw high bytes. */
+            jb_printf(jb, "\\u%04x", *p);
         } else {
             char c[2] = {(char)*p, 0};
             jb_puts(jb, c);
@@ -148,6 +151,60 @@ safe_name(const MachOMap *map, uint64_t vma)
     return s ? s : "";
 }
 
+/* True if s looks like an ObjC/Swift type or selector name (printable). */
+static int
+is_printable_ident(const char *s, int allow_colon)
+{
+    size_t n;
+    if (!s || !s[0]) {
+        return 0;
+    }
+    n = strlen(s);
+    if (n > 512) {
+        return 0;
+    }
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 'a' && c <= 'z') continue;
+        if (c >= 'A' && c <= 'Z') continue;
+        if (c >= '0' && c <= '9') continue;
+        if (c == '_' || c == '$' || c == '.') continue;
+        if (allow_colon && c == ':') continue;
+        /* Swift mangling / demangled leftovers occasionally use these */
+        if (c == '<' || c == '>' || c == ' ' || c == '(' || c == ')' ||
+            c == '-' || c == '+' || c == ',') {
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static const char *
+ro_name_at(const MachOMap *map, uint64_t ro_vma)
+{
+    const uint8_t *ro = macho_vma_to_ptr(map, ro_vma, 48);
+    uint64_t name_raw;
+    if (!ro) {
+        return NULL;
+    }
+    memcpy(&name_raw, ro + 24, 8);
+    return macho_cstr_at(map, macho_fixup_ptr(map, name_raw));
+}
+
+/*
+ * Prefer class_ro_t when name@+24 is a printable identifier.
+ * The old heuristic (any mapped pointer at data+8) false-positives on
+ * class_ro_t itself: +8 is instanceSize/reserved, which can look like a VMA
+ * after chained decoding and yields garbage class/method names in the UI.
+ */
+static int
+looks_like_class_ro(const MachOMap *map, uint64_t ro_vma)
+{
+    const char *name = ro_name_at(map, ro_vma);
+    return is_printable_ident(name, 0);
+}
+
 /* class_t.data → class_ro_t (handles direct ro or class_rw_t.ro). */
 static const uint8_t *
 class_ro_for_class(const MachOMap *map, uint64_t class_vma, uint64_t *out_ro_vma)
@@ -155,7 +212,7 @@ class_ro_for_class(const MachOMap *map, uint64_t class_vma, uint64_t *out_ro_vma
     const uint8_t *cls;
     uint64_t data_ptr;
     const uint8_t *rw_or_ro;
-    uint64_t ro_vma;
+    uint64_t ro_vma = 0;
     const uint8_t *ro;
 
     cls = macho_vma_to_ptr(map, class_vma, 40);
@@ -167,20 +224,32 @@ class_ro_for_class(const MachOMap *map, uint64_t class_vma, uint64_t *out_ro_vma
         memcpy(&raw, cls + 32, 8);
         data_ptr = macho_fixup_ptr(map, raw);
     }
+    if (!data_ptr) {
+        return NULL;
+    }
     rw_or_ro = macho_vma_to_ptr(map, data_ptr, 16);
     if (!rw_or_ro) {
         return NULL;
     }
-    {
+
+    /* Most on-disk images store class_ro_t directly in class_t.data. */
+    if (looks_like_class_ro(map, data_ptr)) {
+        ro_vma = data_ptr;
+    } else {
         uint64_t raw;
+        uint64_t maybe_ro;
         memcpy(&raw, rw_or_ro + 8, 8);
-        uint64_t maybe_ro = macho_fixup_ptr(map, raw);
-        if (maybe_ro && macho_vma_to_ptr(map, maybe_ro, 48)) {
+        maybe_ro = macho_fixup_ptr(map, raw);
+        if (maybe_ro && looks_like_class_ro(map, maybe_ro)) {
             ro_vma = maybe_ro;
-        } else {
+        } else if (macho_vma_to_ptr(map, data_ptr, 48)) {
+            /* Last resort: treat as ro even without a clean name. */
             ro_vma = data_ptr;
+        } else {
+            return NULL;
         }
     }
+
     ro = macho_vma_to_ptr(map, ro_vma, 48);
     if (!ro) {
         return NULL;
@@ -242,22 +311,30 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
             uint64_t imp_addr =
                 macho_strip_ptr(method_list_vma + 8 + (uint64_t)i * entsize + 8) +
                 (int64_t)imp_rel;
-            /* Relative name often points to a pointer (selref) or cstring. */
+            /* Relative name: either a direct cstring VMA or a pointer slot. */
             {
-                const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
-                if (np) {
-                    uint64_t maybe = macho_fixup_ptr(map, ru64(np));
-                    const char *cs = macho_cstr_at(map, maybe);
-                    if (cs && cs[0]) {
-                        name = cs;
-                    } else {
-                        name = safe_name(map, name_addr);
-                    }
+                const char *direct = macho_cstr_at(map, name_addr);
+                if (direct && is_printable_ident(direct, 1)) {
+                    name = direct;
                 } else {
-                    name = safe_name(map, name_addr);
+                    const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
+                    if (np) {
+                        uint64_t maybe = macho_fixup_ptr(map, ru64(np));
+                        const char *cs = macho_cstr_at(map, maybe);
+                        if (cs && is_printable_ident(cs, 1)) {
+                            name = cs;
+                        }
+                    }
                 }
             }
-            types = safe_name(map, types_addr);
+            {
+                const char *tdirect = macho_cstr_at(map, types_addr);
+                if (tdirect && tdirect[0]) {
+                    types = tdirect;
+                } else {
+                    types = safe_name(map, types_addr);
+                }
+            }
             imp = imp_addr;
         } else {
             if (!macho_vma_to_ptr(map, method_list_vma + 8 + (uint64_t)i * entsize,
@@ -269,6 +346,9 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
             imp = macho_fixup_ptr(map, ru64(mp + 16));
         }
 
+        if (!is_printable_ident(name, 1)) {
+            continue; /* skip garbage selectors from misparsed lists */
+        }
         macho_vma_to_fileoff(map, imp, &file_off);
         if (!*first) {
             jb_puts(jb, ",");
@@ -277,7 +357,7 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
         jb_puts(jb, "{\"name\":");
         jb_escape(jb, name);
         jb_puts(jb, ",\"types\":");
-        jb_escape(jb, types);
+        jb_escape(jb, types && types[0] ? types : "");
         jb_printf(jb,
                   ",\"imp\":\"0x%llx\",\"file_offset\":%llu,\"size\":%llu}",
                   (unsigned long long)imp, (unsigned long long)file_off,
@@ -404,6 +484,9 @@ dump_one_class(JB *jb, const MachOMap *map, uint64_t class_vma, int *first_class
     }
     /* class_ro_t: flags, instanceStart, instanceSize, reserved, ivarLayout, name, baseMethods, ... */
     cname = safe_name(map, ru64(ro + 24));
+    if (!is_printable_ident(cname, 0)) {
+        return -1; /* mis-resolved ro — don't emit garbage names */
+    }
     methods_vma = macho_fixup_ptr(map, ru64(ro + 32));
     ivars_vma = macho_fixup_ptr(map, ru64(ro + 48));
     props_vma = macho_fixup_ptr(map, ru64(ro + 64));
@@ -415,7 +498,7 @@ dump_one_class(JB *jb, const MachOMap *map, uint64_t class_vma, int *first_class
     }
     *first_class = 0;
     jb_puts(jb, "{\"name\":");
-    jb_escape(jb, cname && cname[0] ? cname : "Unknown");
+    jb_escape(jb, cname);
     jb_printf(jb, ",\"vma\":\"0x%llx\",", (unsigned long long)macho_strip_ptr(class_vma));
     jb_puts(jb, "\"methods\":[");
     dump_methods(jb, map, methods_vma, &first_method);
@@ -878,13 +961,18 @@ collect_methods_into(const MachOMap *map, uint64_t methods_vma, int is_class,
             uint64_t imp_addr =
                 macho_strip_ptr(methods_vma + 8 + (uint64_t)mi * entsize + 8) +
                 (int64_t)imp_rel;
-            const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
-            if (np) {
-                uint64_t maybe = macho_fixup_ptr(map, ru64(np));
-                const char *cs = macho_cstr_at(map, maybe);
-                name = (cs && cs[0]) ? cs : safe_name(map, name_addr);
+            const char *direct = macho_cstr_at(map, name_addr);
+            if (direct && is_printable_ident(direct, 1)) {
+                name = direct;
             } else {
-                name = safe_name(map, name_addr);
+                const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
+                if (np) {
+                    uint64_t maybe = macho_fixup_ptr(map, ru64(np));
+                    const char *cs = macho_cstr_at(map, maybe);
+                    if (cs && is_printable_ident(cs, 1)) {
+                        name = cs;
+                    }
+                }
             }
             imp = imp_addr;
         } else {
@@ -897,7 +985,7 @@ collect_methods_into(const MachOMap *map, uint64_t methods_vma, int is_class,
             imp = macho_fixup_ptr(map, ru64(mp + 16));
         }
         macho_vma_to_fileoff(map, imp, &foff);
-        if (!name || !name[0]) {
+        if (!is_printable_ident(name, 1)) {
             continue;
         }
         sm = &sc->methods[sc->nmethods++];
@@ -963,8 +1051,8 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
                 continue;
             }
             cname = safe_name(map, ru64(ro + 24));
-            if (!cname || !cname[0]) {
-                cname = "Unknown";
+            if (!is_printable_ident(cname, 0)) {
+                continue;
             }
             sc = &classes[class_count];
             sanitize_ident(cname, sc->name, sizeof(sc->name));

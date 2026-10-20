@@ -125,26 +125,26 @@ struct MachODetailView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(method.name)
-                                    .font(.body.monospaced())
+                                    .font(.system(size: 13, design: .monospaced))
                                 Text("imp \(method.vmaHex)  off \(method.fileOffset)  size \(method.size)")
-                                    .font(.caption2.monospaced())
+                                    .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(.secondary)
                             }
                         }
                     }
                     if !cls.properties.isEmpty {
                         Text("props: " + cls.properties.joined(separator: ", "))
-                            .font(.caption)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     if !cls.ivars.isEmpty {
                         Text("ivars: " + cls.ivars.joined(separator: ", "))
-                            .font(.caption)
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 } label: {
                     Text(cls.name)
-                        .font(.body.monospaced())
+                        .font(.system(size: 13, design: .monospaced))
                 }
             }
         } header: {
@@ -168,9 +168,9 @@ struct MachODetailView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(fn.name)
-                            .font(.body.monospaced())
+                            .font(.system(size: 13, design: .monospaced))
                         Text("\(fn.kind)  \(fn.vmaHex)  off \(fn.fileOffset)  size \(fn.size)")
-                            .font(.caption2.monospaced())
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
