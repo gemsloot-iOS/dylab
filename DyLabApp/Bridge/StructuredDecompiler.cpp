@@ -675,7 +675,7 @@ int structured_decompile_impl(const MachOMap *map, const uint8_t *code,
         fname = buf;
     }
 
-    oss << "// Phase 3B structured decompile @ 0x" << std::hex << address
+    oss << "// dylab structured decompile @ 0x" << std::hex << address
         << std::dec << "\n";
     oss << "// CFG: " << blocks.size() << " basic blocks\n";
     oss << "id " << fname << "(id self, SEL _cmd, ...) {\n";
