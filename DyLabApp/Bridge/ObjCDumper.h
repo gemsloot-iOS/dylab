@@ -15,10 +15,11 @@ extern "C" {
 int objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size);
 
 /**
- * Generate an ObjC header + Tweak.m skeleton for the binary.
- * Writes ClassName.h files and Tweak.m under out_dir (created if needed).
- * If out_header_path/out_tweak_path are non-NULL, copies primary paths there
- * (buffers must be large enough, e.g. PATH_MAX).
+ * Generate TweakClasses.h + Tweak.m from ObjC metadata in the Mach-O.
+ * Discovers classes via __objc_classlist (chained-fixup aware), including
+ * class methods from the metaclass, and fills method bodies via the
+ * structured decompiler. Falls back to DyLabHookTarget only when no ObjC
+ * classes can be resolved (e.g. non-ObjC binary).
  * @return 0 on success
  */
 int objc_generate_header_and_skeleton(const char *path,

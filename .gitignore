@@ -46,3 +46,4 @@ workspace_test.txt
 tests/test_objc_lowering
 tests/test_deb_packager
 tests/test_link_smoke
+tests/test_macho_fixup_ptr

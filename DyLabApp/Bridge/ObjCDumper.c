@@ -144,8 +144,51 @@ ri32(const uint8_t *p)
 static const char *
 safe_name(const MachOMap *map, uint64_t vma)
 {
-    const char *s = macho_cstr_at(map, macho_strip_ptr(vma));
+    const char *s = macho_cstr_at(map, macho_fixup_ptr(map, vma));
     return s ? s : "";
+}
+
+/* class_t.data → class_ro_t (handles direct ro or class_rw_t.ro). */
+static const uint8_t *
+class_ro_for_class(const MachOMap *map, uint64_t class_vma, uint64_t *out_ro_vma)
+{
+    const uint8_t *cls;
+    uint64_t data_ptr;
+    const uint8_t *rw_or_ro;
+    uint64_t ro_vma;
+    const uint8_t *ro;
+
+    cls = macho_vma_to_ptr(map, class_vma, 40);
+    if (!cls) {
+        return NULL;
+    }
+    {
+        uint64_t raw;
+        memcpy(&raw, cls + 32, 8);
+        data_ptr = macho_fixup_ptr(map, raw);
+    }
+    rw_or_ro = macho_vma_to_ptr(map, data_ptr, 16);
+    if (!rw_or_ro) {
+        return NULL;
+    }
+    {
+        uint64_t raw;
+        memcpy(&raw, rw_or_ro + 8, 8);
+        uint64_t maybe_ro = macho_fixup_ptr(map, raw);
+        if (maybe_ro && macho_vma_to_ptr(map, maybe_ro, 48)) {
+            ro_vma = maybe_ro;
+        } else {
+            ro_vma = data_ptr;
+        }
+    }
+    ro = macho_vma_to_ptr(map, ro_vma, 48);
+    if (!ro) {
+        return NULL;
+    }
+    if (out_ro_vma) {
+        *out_ro_vma = ro_vma;
+    }
+    return ro;
 }
 
 static void
@@ -203,7 +246,7 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
             {
                 const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
                 if (np) {
-                    uint64_t maybe = macho_strip_ptr(ru64(np));
+                    uint64_t maybe = macho_fixup_ptr(map, ru64(np));
                     const char *cs = macho_cstr_at(map, maybe);
                     if (cs && cs[0]) {
                         name = cs;
@@ -223,7 +266,7 @@ dump_methods(JB *jb, const MachOMap *map, uint64_t method_list_vma, int *first)
             }
             name = safe_name(map, ru64(mp));
             types = safe_name(map, ru64(mp + 8));
-            imp = macho_strip_ptr(ru64(mp + 16));
+            imp = macho_fixup_ptr(map, ru64(mp + 16));
         }
 
         macho_vma_to_fileoff(map, imp, &file_off);
@@ -343,43 +386,29 @@ static int
 dump_one_class(JB *jb, const MachOMap *map, uint64_t class_vma, int *first_class)
 {
     const uint8_t *cls;
-    uint64_t data_ptr;
-    const uint8_t *rw_or_ro;
-    uint64_t ro_vma;
     const uint8_t *ro;
     const char *cname;
     uint64_t methods_vma;
     uint64_t ivars_vma;
     uint64_t props_vma;
+    uint64_t meta_vma;
     int first_method = 1;
 
     cls = macho_vma_to_ptr(map, class_vma, 40);
     if (!cls) {
         return -1;
     }
-    data_ptr = macho_strip_ptr(ru64(cls + 32)); /* class_t.data */
-    rw_or_ro = macho_vma_to_ptr(map, data_ptr, 16);
-    if (!rw_or_ro) {
-        return -1;
-    }
-    /* class_rw_t.ro is at +8 on modern runtimes; class_ro_t may be direct. */
-    {
-        uint64_t maybe_ro = macho_strip_ptr(ru64(rw_or_ro + 8));
-        if (macho_vma_to_ptr(map, maybe_ro, 48)) {
-            ro_vma = maybe_ro;
-        } else {
-            ro_vma = data_ptr;
-        }
-    }
-    ro = macho_vma_to_ptr(map, ro_vma, 48);
+    ro = class_ro_for_class(map, class_vma, NULL);
     if (!ro) {
         return -1;
     }
     /* class_ro_t: flags, instanceStart, instanceSize, reserved, ivarLayout, name, baseMethods, ... */
     cname = safe_name(map, ru64(ro + 24));
-    methods_vma = macho_strip_ptr(ru64(ro + 32));
-    ivars_vma = macho_strip_ptr(ru64(ro + 48));
-    props_vma = macho_strip_ptr(ru64(ro + 64));
+    methods_vma = macho_fixup_ptr(map, ru64(ro + 32));
+    ivars_vma = macho_fixup_ptr(map, ru64(ro + 48));
+    props_vma = macho_fixup_ptr(map, ru64(ro + 64));
+    /* class_t.isa → metaclass (class methods live there). */
+    meta_vma = macho_fixup_ptr(map, ru64(cls));
 
     if (!*first_class) {
         jb_puts(jb, ",");
@@ -390,6 +419,14 @@ dump_one_class(JB *jb, const MachOMap *map, uint64_t class_vma, int *first_class
     jb_printf(jb, ",\"vma\":\"0x%llx\",", (unsigned long long)macho_strip_ptr(class_vma));
     jb_puts(jb, "\"methods\":[");
     dump_methods(jb, map, methods_vma, &first_method);
+    if (meta_vma && meta_vma != class_vma) {
+        const uint8_t *meta_ro = class_ro_for_class(map, meta_vma, NULL);
+        if (meta_ro) {
+            uint64_t class_methods =
+                macho_fixup_ptr(map, ru64(meta_ro + 32));
+            dump_methods(jb, map, class_methods, &first_method);
+        }
+    }
     jb_puts(jb, "],");
     dump_ivars(jb, map, ivars_vma);
     jb_puts(jb, ",");
@@ -477,7 +514,7 @@ collect_method_imps_from_list(const MachOMap *map, uint64_t method_list_vma,
                                   24)) {
                 break;
             }
-            imp = macho_strip_ptr(ru64(mp + 16));
+            imp = macho_fixup_ptr(map, ru64(mp + 16));
         }
         if (imp) {
             out[(*n)++] = imp;
@@ -530,15 +567,15 @@ objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size)
                 macho_vma_to_ptr(&map, classlist->addr + i * 8, 8);
             uint64_t class_vma;
             const uint8_t *cls;
-            uint64_t data_ptr;
-            const uint8_t *rw_or_ro;
-            uint64_t ro_vma;
             const uint8_t *ro;
             uint64_t methods_vma;
             if (!slot) {
                 continue;
             }
-            class_vma = macho_strip_ptr(ru64(slot));
+            class_vma = macho_fixup_ptr(&map, ru64(slot));
+            if (!class_vma) {
+                continue;
+            }
             dump_one_class(&jb, &map, class_vma, &first_class);
 
             /* Also gather IMPs for size merge */
@@ -549,26 +586,23 @@ objc_dump_classes_json(const char *path, char *out_buf, size_t out_buf_size)
             if (!cls) {
                 continue;
             }
-            data_ptr = macho_strip_ptr(ru64(cls + 32));
-            rw_or_ro = macho_vma_to_ptr(&map, data_ptr, 16);
-            if (!rw_or_ro) {
-                continue;
-            }
-            {
-                uint64_t maybe_ro = macho_strip_ptr(ru64(rw_or_ro + 8));
-                if (macho_vma_to_ptr(&map, maybe_ro, 48)) {
-                    ro_vma = maybe_ro;
-                } else {
-                    ro_vma = data_ptr;
-                }
-            }
-            ro = macho_vma_to_ptr(&map, ro_vma, 48);
+            ro = class_ro_for_class(&map, class_vma, NULL);
             if (!ro) {
                 continue;
             }
-            methods_vma = macho_strip_ptr(ru64(ro + 32));
+            methods_vma = macho_fixup_ptr(&map, ru64(ro + 32));
             collect_method_imps_from_list(&map, methods_vma, method_imps,
                                           &n_imps, DYLAB_MAX_TEXT_FNS);
+            {
+                uint64_t meta_vma = macho_fixup_ptr(&map, ru64(cls));
+                const uint8_t *meta_ro;
+                if (meta_vma && meta_vma != class_vma &&
+                    (meta_ro = class_ro_for_class(&map, meta_vma, NULL))) {
+                    uint64_t cm = macho_fixup_ptr(&map, ru64(meta_ro + 32));
+                    collect_method_imps_from_list(&map, cm, method_imps,
+                                                  &n_imps, DYLAB_MAX_TEXT_FNS);
+                }
+            }
         }
     }
 
@@ -692,9 +726,9 @@ emit_method_body_from_decompile(FILE *f, const char *dylib_path, uint64_t imp,
     free(buf);
 }
 
-/* Emit method signature pieces for skeleton (sel "foo:bar:" → - (id)foo:(id)a0 bar:(id)a1). */
+/* Emit method signature pieces for skeleton (sel "foo:bar:" → -/+ (id)foo:(id)a0 bar:(id)a1). */
 static void
-emit_method_decl(FILE *f, const char *sel)
+emit_method_decl(FILE *f, const char *sel, int is_class_method)
 {
     char buf[512];
     char *parts[32];
@@ -702,9 +736,10 @@ emit_method_decl(FILE *f, const char *sel)
     char *tok;
     char *save = NULL;
     int arg = 0;
+    const char kind = is_class_method ? '+' : '-';
 
     if (!sel || !sel[0]) {
-        fprintf(f, "- (id)dylab_unknown;\n");
+        fprintf(f, "%c (id)dylab_unknown;\n", kind);
         return;
     }
     snprintf(buf, sizeof(buf), "%s", sel);
@@ -716,10 +751,10 @@ emit_method_decl(FILE *f, const char *sel)
     if (nparts == 1 && (!sel[strlen(sel) - 1] || strchr(sel, ':') == NULL)) {
         char idbuf[256];
         sanitize_ident(parts[0], idbuf, sizeof(idbuf));
-        fprintf(f, "- (id)%s;\n", idbuf);
+        fprintf(f, "%c (id)%s;\n", kind, idbuf);
         return;
     }
-    fprintf(f, "- (id)");
+    fprintf(f, "%c (id)", kind);
     for (int i = 0; i < nparts; i++) {
         char idbuf[256];
         sanitize_ident(parts[i], idbuf, sizeof(idbuf));
@@ -738,8 +773,8 @@ emit_method_decl(FILE *f, const char *sel)
 }
 
 static void
-emit_method_impl(FILE *f, const char *sel, const char *dylib_path, uint64_t imp,
-                 uint64_t file_off)
+emit_method_impl(FILE *f, const char *sel, int is_class_method,
+                 const char *dylib_path, uint64_t imp, uint64_t file_off)
 {
     char buf[512];
     char *parts[32];
@@ -747,9 +782,10 @@ emit_method_impl(FILE *f, const char *sel, const char *dylib_path, uint64_t imp,
     char *tok;
     char *save = NULL;
     int arg = 0;
+    const char kind = is_class_method ? '+' : '-';
 
     if (!sel || !sel[0]) {
-        fprintf(f, "- (id)dylab_unknown {\n");
+        fprintf(f, "%c (id)dylab_unknown {\n", kind);
         emit_method_body_from_decompile(f, dylib_path, imp, file_off);
         fprintf(f, "}\n");
         return;
@@ -763,12 +799,12 @@ emit_method_impl(FILE *f, const char *sel, const char *dylib_path, uint64_t imp,
     if (nparts == 1 && strchr(sel, ':') == NULL) {
         char idbuf[256];
         sanitize_ident(parts[0], idbuf, sizeof(idbuf));
-        fprintf(f, "- (id)%s {\n", idbuf);
+        fprintf(f, "%c (id)%s {\n", kind, idbuf);
         emit_method_body_from_decompile(f, dylib_path, imp, file_off);
         fprintf(f, "}\n");
         return;
     }
-    fprintf(f, "- (id)");
+    fprintf(f, "%c (id)", kind);
     for (int i = 0; i < nparts; i++) {
         char idbuf[256];
         sanitize_ident(parts[i], idbuf, sizeof(idbuf));
@@ -783,23 +819,114 @@ emit_method_impl(FILE *f, const char *sel, const char *dylib_path, uint64_t imp,
     fprintf(f, "}\n");
 }
 
+enum { MAX_SKEL_CLASSES = 64, MAX_SKEL_METHODS = 48 };
+
+typedef struct {
+    char sel[128];
+    uint64_t imp;
+    uint64_t off;
+    int is_class; /* + method from metaclass */
+} SkelMethod;
+
+typedef struct {
+    char name[96];
+    SkelMethod methods[MAX_SKEL_METHODS];
+    int nmethods;
+} SkelClass;
+
+static void
+collect_methods_into(const MachOMap *map, uint64_t methods_vma, int is_class,
+                     SkelClass *sc)
+{
+    const uint8_t *mbase;
+    uint32_t entsize_flags;
+    uint32_t mcount;
+    int relative;
+    uint32_t entsize;
+
+    if (!methods_vma || sc->nmethods >= MAX_SKEL_METHODS) {
+        return;
+    }
+    mbase = macho_vma_to_ptr(map, methods_vma, 8);
+    if (!mbase) {
+        return;
+    }
+    entsize_flags = ru32(mbase);
+    mcount = ru32(mbase + 4);
+    relative = (entsize_flags & METHOD_LIST_RELATIVE) != 0;
+    entsize = entsize_flags & 0xFFFFu;
+    if (entsize == 0) {
+        entsize = relative ? 12 : 24;
+    }
+    if (mcount > 4096) {
+        mcount = 4096;
+    }
+    for (uint32_t mi = 0; mi < mcount && sc->nmethods < MAX_SKEL_METHODS;
+         mi++) {
+        const uint8_t *mp = mbase + 8 + (size_t)mi * entsize;
+        const char *name = "";
+        uint64_t imp = 0;
+        uint64_t foff = 0;
+        SkelMethod *sm;
+
+        if (relative) {
+            int32_t name_rel = ri32(mp);
+            int32_t imp_rel = ri32(mp + 8);
+            uint64_t name_addr =
+                macho_strip_ptr(methods_vma + 8 + (uint64_t)mi * entsize) +
+                (int64_t)name_rel;
+            uint64_t imp_addr =
+                macho_strip_ptr(methods_vma + 8 + (uint64_t)mi * entsize + 8) +
+                (int64_t)imp_rel;
+            const uint8_t *np = macho_vma_to_ptr(map, name_addr, 8);
+            if (np) {
+                uint64_t maybe = macho_fixup_ptr(map, ru64(np));
+                const char *cs = macho_cstr_at(map, maybe);
+                name = (cs && cs[0]) ? cs : safe_name(map, name_addr);
+            } else {
+                name = safe_name(map, name_addr);
+            }
+            imp = imp_addr;
+        } else {
+            if (!macho_vma_to_ptr(map,
+                                  methods_vma + 8 + (uint64_t)mi * entsize,
+                                  24)) {
+                break;
+            }
+            name = safe_name(map, ru64(mp));
+            imp = macho_fixup_ptr(map, ru64(mp + 16));
+        }
+        macho_vma_to_fileoff(map, imp, &foff);
+        if (!name || !name[0]) {
+            continue;
+        }
+        sm = &sc->methods[sc->nmethods++];
+        snprintf(sm->sel, sizeof(sm->sel), "%s", name);
+        sm->imp = imp;
+        sm->off = foff;
+        sm->is_class = is_class;
+    }
+}
+
 static void
 write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
 {
     const MachOSect *classlist;
     int class_count = 0;
-    enum { MAX_SKEL_CLASSES = 24, MAX_SKEL_METHODS = 16 };
-    char class_names[MAX_SKEL_CLASSES][96];
-    char method_sels[MAX_SKEL_CLASSES][MAX_SKEL_METHODS][128];
-    uint64_t method_imps[MAX_SKEL_CLASSES][MAX_SKEL_METHODS];
-    uint64_t method_offs[MAX_SKEL_CLASSES][MAX_SKEL_METHODS];
-    int method_counts[MAX_SKEL_CLASSES];
+    SkelClass *classes;
 
-    memset(class_names, 0, sizeof(class_names));
-    memset(method_sels, 0, sizeof(method_sels));
-    memset(method_imps, 0, sizeof(method_imps));
-    memset(method_offs, 0, sizeof(method_offs));
-    memset(method_counts, 0, sizeof(method_counts));
+    classes = (SkelClass *)calloc(MAX_SKEL_CLASSES, sizeof(SkelClass));
+    if (!classes) {
+        fprintf(hf,
+                "@interface DyLabHookTarget : NSObject\n"
+                "- (id)init;\n"
+                "@end\n");
+        fprintf(tf,
+                "@implementation DyLabHookTarget\n"
+                "- (id)init { return [super init]; }\n"
+                "@end\n");
+        return;
+    }
 
     classlist = macho_find_sect(map, "__DATA_CONST", "__objc_classlist");
     if (!classlist) {
@@ -816,41 +943,22 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
                 macho_vma_to_ptr(map, classlist->addr + i * 8, 8);
             uint64_t class_vma;
             const uint8_t *cls;
-            uint64_t data_ptr;
-            const uint8_t *rw_or_ro;
-            uint64_t ro_vma;
             const uint8_t *ro;
             const char *cname;
-            uint64_t methods_vma;
-            const uint8_t *mbase;
-            uint32_t entsize_flags;
-            uint32_t mcount;
-            int relative;
-            uint32_t entsize;
-            int ci;
+            SkelClass *sc;
 
             if (!slot) {
                 continue;
             }
-            class_vma = macho_strip_ptr(ru64(slot));
+            class_vma = macho_fixup_ptr(map, ru64(slot));
+            if (!class_vma) {
+                continue;
+            }
             cls = macho_vma_to_ptr(map, class_vma, 40);
             if (!cls) {
                 continue;
             }
-            data_ptr = macho_strip_ptr(ru64(cls + 32));
-            rw_or_ro = macho_vma_to_ptr(map, data_ptr, 16);
-            if (!rw_or_ro) {
-                continue;
-            }
-            {
-                uint64_t maybe_ro = macho_strip_ptr(ru64(rw_or_ro + 8));
-                if (macho_vma_to_ptr(map, maybe_ro, 48)) {
-                    ro_vma = maybe_ro;
-                } else {
-                    ro_vma = data_ptr;
-                }
-            }
-            ro = macho_vma_to_ptr(map, ro_vma, 48);
+            ro = class_ro_for_class(map, class_vma, NULL);
             if (!ro) {
                 continue;
             }
@@ -858,64 +966,18 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
             if (!cname || !cname[0]) {
                 cname = "Unknown";
             }
-            ci = class_count;
-            sanitize_ident(cname, class_names[ci], sizeof(class_names[ci]));
-            methods_vma = macho_strip_ptr(ru64(ro + 32));
-            method_counts[ci] = 0;
-            if (methods_vma) {
-                mbase = macho_vma_to_ptr(map, methods_vma, 8);
-                if (mbase) {
-                    entsize_flags = ru32(mbase);
-                    mcount = ru32(mbase + 4);
-                    relative = (entsize_flags & METHOD_LIST_RELATIVE) != 0;
-                    entsize = entsize_flags & 0xFFFFu;
-                    if (entsize == 0) {
-                        entsize = relative ? 12 : 24;
-                    }
-                    if (mcount > MAX_SKEL_METHODS) {
-                        mcount = MAX_SKEL_METHODS;
-                    }
-                    for (uint32_t mi = 0; mi < mcount; mi++) {
-                        const uint8_t *mp = mbase + 8 + (size_t)mi * entsize;
-                        const char *name = "";
-                        uint64_t imp = 0;
-                        uint64_t foff = 0;
-                        if (relative) {
-                            int32_t name_rel = ri32(mp);
-                            int32_t imp_rel = ri32(mp + 8);
-                            uint64_t name_addr =
-                                macho_strip_ptr(methods_vma + 8 +
-                                                (uint64_t)mi * entsize) +
-                                (int64_t)name_rel;
-                            uint64_t imp_addr =
-                                macho_strip_ptr(methods_vma + 8 +
-                                                (uint64_t)mi * entsize + 8) +
-                                (int64_t)imp_rel;
-                            const uint8_t *np =
-                                macho_vma_to_ptr(map, name_addr, 8);
-                            if (np) {
-                                uint64_t maybe = macho_strip_ptr(ru64(np));
-                                const char *cs = macho_cstr_at(map, maybe);
-                                name = (cs && cs[0]) ? cs
-                                                     : safe_name(map, name_addr);
-                            } else {
-                                name = safe_name(map, name_addr);
-                            }
-                            imp = imp_addr;
-                        } else {
-                            name = safe_name(map, ru64(mp));
-                            imp = macho_strip_ptr(ru64(mp + 16));
-                        }
-                        macho_vma_to_fileoff(map, imp, &foff);
-                        if (name && name[0]) {
-                            int mi2 = method_counts[ci];
-                            snprintf(method_sels[ci][mi2],
-                                     sizeof(method_sels[ci][0]), "%s", name);
-                            method_imps[ci][mi2] = imp;
-                            method_offs[ci][mi2] = foff;
-                            method_counts[ci]++;
-                        }
-                    }
+            sc = &classes[class_count];
+            sanitize_ident(cname, sc->name, sizeof(sc->name));
+            sc->nmethods = 0;
+            collect_methods_into(map, macho_fixup_ptr(map, ru64(ro + 32)), 0,
+                                 sc);
+            {
+                uint64_t meta_vma = macho_fixup_ptr(map, ru64(cls));
+                const uint8_t *meta_ro;
+                if (meta_vma && meta_vma != class_vma &&
+                    (meta_ro = class_ro_for_class(map, meta_vma, NULL))) {
+                    collect_methods_into(
+                        map, macho_fixup_ptr(map, ru64(meta_ro + 32)), 1, sc);
                 }
             }
             class_count++;
@@ -941,6 +1003,7 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
             path);
 
     if (class_count == 0) {
+        /* Fallback only when the binary has no discoverable ObjC classes. */
         fprintf(hf,
                 "@interface DyLabHookTarget : NSObject\n"
                 "- (id)init;\n"
@@ -952,25 +1015,27 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
                 "    return self;\n"
                 "}\n"
                 "@end\n");
+        free(classes);
         return;
     }
 
     for (int i = 0; i < class_count; i++) {
-        fprintf(hf, "@interface %s : NSObject\n", class_names[i]);
-        for (int m = 0; m < method_counts[i]; m++) {
-            emit_method_decl(hf, method_sels[i][m]);
+        SkelClass *sc = &classes[i];
+        fprintf(hf, "@interface %s : NSObject\n", sc->name);
+        for (int m = 0; m < sc->nmethods; m++) {
+            emit_method_decl(hf, sc->methods[m].sel, sc->methods[m].is_class);
         }
-        if (method_counts[i] == 0) {
+        if (sc->nmethods == 0) {
             fprintf(hf, "- (id)init;\n");
         }
         fprintf(hf, "@end\n\n");
 
-        fprintf(tf, "@implementation %s\n", class_names[i]);
-        for (int m = 0; m < method_counts[i]; m++) {
-            emit_method_impl(tf, method_sels[i][m], path, method_imps[i][m],
-                             method_offs[i][m]);
+        fprintf(tf, "@implementation %s\n", sc->name);
+        for (int m = 0; m < sc->nmethods; m++) {
+            emit_method_impl(tf, sc->methods[m].sel, sc->methods[m].is_class,
+                             path, sc->methods[m].imp, sc->methods[m].off);
         }
-        if (method_counts[i] == 0) {
+        if (sc->nmethods == 0) {
             fprintf(tf,
                     "- (id)init {\n"
                     "    self = [super init];\n"
@@ -979,6 +1044,7 @@ write_skeleton_from_map(FILE *hf, FILE *tf, MachOMap *map, const char *path)
         }
         fprintf(tf, "@end\n\n");
     }
+    free(classes);
 }
 
 int

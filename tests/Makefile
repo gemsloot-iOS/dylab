@@ -12,15 +12,18 @@ CFLAGS ?= -O2 -Wall -I$(BRIDGE)
 LDFLAGS_Z ?= -lz
 LDFLAGS_TCC ?= -L$(TCC_LIBDIR) -ltcc -ldl -lm
 
-.PHONY: all clean lowering deb link e2e
+.PHONY: all clean lowering deb link e2e fixup
 
-all: lowering deb
+all: lowering deb fixup
 
 lowering: test_objc_lowering
 	./test_objc_lowering
 
 deb: test_deb_packager
 	./test_deb_packager
+
+fixup: test_macho_fixup_ptr
+	./test_macho_fixup_ptr
 
 link: test_link_smoke
 	./test_link_smoke
@@ -34,10 +37,13 @@ test_objc_lowering: test_objc_lowering.cpp $(BRIDGE)/ObjCLowering.cpp
 test_deb_packager: test_deb_packager.c $(BRIDGE)/DebPackager.c
 	$(CC) $(CFLAGS) -o $@ test_deb_packager.c $(BRIDGE)/DebPackager.c $(LDFLAGS_Z)
 
+test_macho_fixup_ptr: test_macho_fixup_ptr.c $(BRIDGE)/MachOMap.c
+	$(CC) $(CFLAGS) -o $@ test_macho_fixup_ptr.c $(BRIDGE)/MachOMap.c
+
 test_link_smoke: test_link_smoke.cpp $(BRIDGE)/MachODylibLinker.cpp $(BRIDGE)/MachOSigner.cpp
 	$(CXX) $(CXXFLAGS) -o $@ test_link_smoke.cpp \
 	  $(BRIDGE)/MachODylibLinker.cpp $(BRIDGE)/MachOSigner.cpp \
 	  $(LDFLAGS_TCC)
 
 clean:
-	rm -f test_objc_lowering test_deb_packager test_link_smoke
+	rm -f test_objc_lowering test_deb_packager test_link_smoke test_macho_fixup_ptr

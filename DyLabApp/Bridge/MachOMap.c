@@ -166,6 +166,38 @@ macho_strip_ptr(uint64_t vma)
     return vma & DYLAB_VMA_MASK;
 }
 
+uint64_t
+macho_fixup_ptr(const MachOMap *map, uint64_t raw)
+{
+    if (!map || !map->has_chained_fixups) {
+        return macho_strip_ptr(raw);
+    }
+    /* dyld_chained_ptr_64_*: bit 62 is bind. */
+    if ((raw >> 62) & 1ull) {
+        return 0;
+    }
+    /* Rebase: 36-bit target in low bits (arm64 common format). */
+    {
+        uint64_t target = raw & 0xFFFFFFFFFull;
+        if (target != 0) {
+            return macho_strip_ptr(target);
+        }
+    }
+    return macho_strip_ptr(raw);
+}
+
+uint64_t
+macho_read_ptr(const MachOMap *map, uint64_t vma)
+{
+    const uint8_t *p = macho_vma_to_ptr(map, vma, 8);
+    uint64_t raw;
+    if (!p) {
+        return 0;
+    }
+    memcpy(&raw, p, 8);
+    return macho_fixup_ptr(map, raw);
+}
+
 static int
 find_arm64_slice(const uint8_t *file, size_t file_len, size_t *out_off,
                  size_t *out_size)
@@ -773,16 +805,9 @@ sanitize_ident(const char *in, char *out, size_t out_sz)
 }
 
 static uint64_t
-decode_chained_or_ptr(uint64_t raw)
+decode_chained_or_ptr(const MachOMap *map, uint64_t raw)
 {
-    /* Prefer plain strip; for rebase-style chained (bind bit clear) low 36–48. */
-    if (((raw >> 62) & 1ull) == 0) {
-        uint64_t t = raw & 0xFFFFFFFFFull; /* 36-bit target common */
-        if (t != 0) {
-            return macho_strip_ptr(t ? t : raw);
-        }
-    }
-    return macho_strip_ptr(raw);
+    return macho_fixup_ptr(map, raw);
 }
 
 int
@@ -804,7 +829,7 @@ macho_resolve_selref(const MachOMap *map, uint64_t selref_vma, char *out,
         return -1;
     }
     memcpy(&raw, p, 8);
-    target = decode_chained_or_ptr(raw);
+    target = decode_chained_or_ptr(map, raw);
     s = macho_cstr_at(map, target);
     methname = macho_find_sect(map, "__TEXT", "__objc_methname");
     if ((!s || !s[0]) && methname) {
@@ -862,19 +887,19 @@ macho_resolve_classref(const MachOMap *map, uint64_t classref_vma, char *out,
         /* Bind without name in table — fail gracefully */
         return -1;
     }
-    class_vma = decode_chained_or_ptr(raw);
+    class_vma = decode_chained_or_ptr(map, raw);
     cls = macho_vma_to_ptr(map, class_vma, 40);
     if (!cls) {
         return -1;
     }
     memcpy(&data_ptr, cls + 32, 8);
-    data_ptr = macho_strip_ptr(data_ptr);
+    data_ptr = macho_fixup_ptr(map, data_ptr);
     rw = macho_vma_to_ptr(map, data_ptr, 16);
     if (!rw) {
         return -1;
     }
     memcpy(&ro_vma, rw + 8, 8);
-    ro_vma = macho_strip_ptr(ro_vma);
+    ro_vma = macho_fixup_ptr(map, ro_vma);
     if (!macho_vma_to_ptr(map, ro_vma, 48)) {
         ro_vma = data_ptr;
     }
@@ -885,7 +910,7 @@ macho_resolve_classref(const MachOMap *map, uint64_t classref_vma, char *out,
     {
         uint64_t name_vma;
         memcpy(&name_vma, ro + 24, 8);
-        cname = macho_cstr_at(map, macho_strip_ptr(name_vma));
+        cname = macho_cstr_at(map, macho_fixup_ptr(map, name_vma));
     }
     if (cname && cname[0] && sanitize_ident(cname, tmp, sizeof(tmp)) == 0) {
         snprintf(out, out_sz, "%s", tmp);

@@ -215,9 +215,9 @@ struct MachODetailView: View {
 
         Section {
             TextEditor(text: $tweakSource)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 280)
-                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 320)
+                .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
         }
 
         Section {
@@ -357,7 +357,13 @@ struct MachODetailView: View {
                     tweakPath = URL(fileURLWithPath: tweakWritten)
                     tweakSource = source
                     selectedTab = 2
-                    statusMessage = "Wrote \(tweakWritten)"
+                    if source.contains("DyLabHookTarget") {
+                        statusMessage =
+                            "No ObjC classes resolved in \(dylibURL.lastPathComponent) — wrote fallback skeleton"
+                    } else {
+                        statusMessage =
+                            "Generated Tweak.m from ObjC classes in \(dylibURL.lastPathComponent)"
+                    }
                 } else {
                     statusMessage = "Generate failed: \(errText.isEmpty ? "rc=\(rc)" : errText)"
                 }
